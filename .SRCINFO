@@ -10,6 +10,6 @@ pkgbase = bollworm
 	depends = glibc
 	options = !debug
 	source = bollworm-0.1.0.tar.gz::https://github.com/Smiduweorc/bollworm/archive/refs/tags/v0.1.0.tar.gz
-	sha256sums = SKIP
+	sha256sums = f2a744e62235b1ce10021fe1e6d7d6fbf2fde95137b4f9fbb411a2130bd2a8e7
 
 pkgname = bollworm
