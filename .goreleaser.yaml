@@ -1,0 +1,71 @@
+# YAML forbids tabs, so this file is indented with spaces.
+version: 2
+
+project_name: bollworm
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: bollworm
+    main: ./cmd/bollworm
+    binary: bollworm
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  - id: default
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+nfpms:
+  - id: packages
+    package_name: bollworm
+    maintainer: Smiduweorc
+    description: Turn an OpenAPI document into a Word reference manual.
+    license: MIT
+    formats:
+      - deb
+      - rpm
+    bindir: /usr/bin
+
+source:
+  enabled: true
+
+release:
+  github:
+    owner: Smiduweorc
+    name: bollworm
+  draft: false
+  prerelease: auto
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-dev"
+
+# The release notes are the tag message, which release.sh writes from the
+# changelog; GoReleaser's own changelog would be a second, different one.
+changelog:
+  disable: true

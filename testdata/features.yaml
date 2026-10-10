@@ -1,0 +1,233 @@
+# Exercises what the two real documents in this directory do not: 3.1 type
+# arrays, webhooks, composition, recursion, every security scheme type,
+# markdown in descriptions, YAML anchors, server variables and examples.
+openapi: 3.1.0
+info:
+  title: Lending Library
+  version: 2.3.0
+  summary: Loans, holds and members for a small lending library.
+  description: |
+    The library lends **books** and *maps*. Use it to:
+
+    - search the catalogue
+    - place holds
+      1. on a single copy
+      2. on any copy
+    - read a member's loans
+
+    | Limit | Value |
+    | --- | --- |
+    | Loans per member | 12 |
+    | Holds per member | 5 |
+
+    Rate limits follow `X-RateLimit-*` headers.<br>Questions go to <help@example.com>.
+
+    ```json
+    {"ok": true}
+    ```
+  contact:
+    name: Front desk
+    email: desk@example.com
+    url: https://example.com/desk
+  license:
+    name: MIT
+    identifier: MIT
+servers:
+  - url: https://{branch}.example.com/v2
+    description: One server per branch
+    variables:
+      branch:
+        default: central
+        enum: [central, harbour]
+        description: The branch code
+tags:
+  - name: Catalogue
+    description: Finding things to borrow.
+  - name: Unused
+    description: Declared, never used, never printed.
+security:
+  - bearer: []
+paths:
+  /items:
+    parameters:
+      - $ref: "#/components/parameters/Limit"
+      - name: q
+        in: query
+        description: Shared query, replaced below.
+        schema: {type: string}
+    get:
+      tags: [Catalogue]
+      summary: Search the catalogue
+      operationId: searchItems
+      parameters:
+        - name: q
+          in: query
+          required: true
+          description: Words to search for
+          schema: {type: string, minLength: 2, maxLength: 64}
+          example: moby dick
+        - name: kind
+          in: query
+          deprecated: true
+          schema: {type: string, enum: [book, map]}
+      responses:
+        "200":
+          description: Matching items
+          headers:
+            X-RateLimit-Remaining:
+              description: Calls left this hour.
+              schema: {type: integer}
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  total: {type: integer, minimum: 0}
+                  items:
+                    type: array
+                    items: {$ref: "#/components/schemas/Item"}
+              examples:
+                two:
+                  summary: Two results
+                  value: &two {total: 2, items: [{id: 1, title: Moby-Dick}, {id: 2, title: Atlas}]}
+        "4XX":
+          $ref: "#/components/responses/Problem"
+  /items/{id}:
+    get:
+      tags: [Catalogue]
+      summary: Get an item
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: {type: integer, format: int64, exclusiveMinimum: 0}
+      security: []
+      responses:
+        "200":
+          description: The item
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Item"}
+              example: *two
+            text/csv:
+              schema: {type: string}
+              example: "id,title\n1,Moby-Dick\n"
+  /holds:
+    post:
+      summary: Place a hold
+      deprecated: true
+      security:
+        - oauth: [holds:write]
+          apiKey: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/Hold"}
+          application/x-www-form-urlencoded:
+            schema: {$ref: "#/components/schemas/Hold"}
+      responses:
+        "201": {description: Placed}
+        default: {$ref: "#/components/responses/Problem"}
+webhooks:
+  itemReturned:
+    post:
+      summary: Item returned
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [item]
+              properties:
+                item: {$ref: "#/components/schemas/Item"}
+                at: {type: string, format: date-time}
+      responses:
+        "204": {description: Acknowledged}
+components:
+  parameters:
+    Limit:
+      name: limit
+      in: query
+      schema: {type: integer, minimum: 1, maximum: 100, default: 20}
+  responses:
+    Problem:
+      description: Something went wrong
+      content:
+        application/problem+json:
+          schema: {$ref: "#/components/schemas/Problem"}
+  securitySchemes:
+    bearer: {type: http, scheme: bearer, bearerFormat: JWT}
+    basic: {type: http, scheme: basic}
+    apiKey: {type: apiKey, in: header, name: X-API-Key, description: Issued at the front desk.}
+    oauth:
+      type: oauth2
+      flows:
+        authorizationCode:
+          authorizationUrl: https://auth.example.com/authorize
+          tokenUrl: https://auth.example.com/token
+          scopes: {holds:write: Place and cancel holds, loans:read: Read loans}
+        clientCredentials:
+          tokenUrl: https://auth.example.com/token
+          scopes: {loans:read: Read loans}
+    oidc: {type: openIdConnect, openIdConnectUrl: https://auth.example.com/.well-known/openid-configuration}
+    mtls: {type: mutualTLS}
+  schemas:
+    Item:
+      description: Anything the library lends.
+      type: object
+      required: [id, title]
+      properties:
+        id: {type: integer, format: int64, readOnly: true}
+        title: {type: string}
+        subtitle: {type: [string, "null"]}
+        kind: {$ref: "#/components/schemas/Kind", description: What sort of item this is.}
+        shelf:
+          type: object
+          properties:
+            room: {type: string}
+            position:
+              type: object
+              properties:
+                bay: {type: integer}
+                level: {type: integer}
+        related:
+          type: array
+          items: {$ref: "#/components/schemas/Item"}
+        meta:
+          type: object
+          additionalProperties: {type: string}
+      example: {id: 1, title: Moby-Dick}
+    Kind:
+      type: string
+      enum: [book, map]
+      default: book
+    Hold:
+      allOf:
+        - $ref: "#/components/schemas/Base"
+        - type: object
+          required: [item]
+          properties:
+            item: {type: integer}
+            copy:
+              oneOf:
+                - {type: integer}
+                - {const: any}
+    Base:
+      type: object
+      properties:
+        created: {type: string, format: date-time, readOnly: true}
+    Problem:
+      type: object
+      properties:
+        title: {type: string}
+        status: {type: integer, minimum: 400, exclusiveMaximum: 600}
+    Shape:
+      oneOf:
+        - $ref: "#/components/schemas/Item"
+        - $ref: "#/components/schemas/Hold"
+    Secret:
+      type: string
+      writeOnly: true
+      pattern: "^[A-Z]{4}$"

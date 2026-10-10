@@ -1,0 +1,16 @@
+{
+  "name": "bollworm",
+  "version": "0.0.0",
+  "description": "Dev tooling for bollworm: git hooks, commit linting and the changelog. The shipped artifact is a Go binary; this manifest only installs the release tooling.",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "prepare": "lefthook install"
+  },
+  "devDependencies": {
+    "@commitlint/cli": "^21.2.2",
+    "@commitlint/config-conventional": "^21.1.0",
+    "git-cliff": "^2.13.1",
+    "lefthook": "^2.1.12"
+  }
+}

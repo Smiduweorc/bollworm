@@ -1,0 +1,28 @@
+# normally I would use the folder name "internal", but this conflicts with a golang convention, so I have taken to call this "interior" for go projects
+# really, these are just test files and my docker bind configs
+interior
+
+# Build output
+/bollworm
+/dist/
+/build/
+
+# Test and fuzz artefacts
+coverage.out
+*.test
+
+# Node dev tooling (lefthook, commitlint, git-cliff)
+node_modules/
+
+# Editor and OS
+.idea/
+.DS_Store
+
+# makepkg output when building the PKGBUILD in the repo root
+/pkg/
+/src/
+*.pkg.tar.zst
+/bollworm-*.tar.gz
+
+# Local AUR clone (its own git repo, pushed to aur.archlinux.org)
+/aur-bollworm/

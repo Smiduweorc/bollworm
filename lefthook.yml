@@ -1,0 +1,23 @@
+# Git hooks, installed by `make setup` (npm's prepare script). YAML forbids
+# tabs, so this file is indented with spaces. Every command is a Makefile
+# task, so the hooks, CI and a person at a shell all run the same thing.
+
+pre-commit:
+  commands:
+    fmt:
+      glob: "*.go"
+      run: make fmt FILES="{staged_files}"
+      stage_fixed: true
+    lint:
+      glob: "{*.go,go.mod,go.sum}"
+      run: make lint
+
+pre-push:
+  commands:
+    test:
+      run: make test
+
+commit-msg:
+  commands:
+    commitlint:
+      run: npx commitlint --edit {1}
