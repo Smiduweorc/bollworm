@@ -3,6 +3,8 @@ package main
 import (
 	"archive/zip"
 	"bytes"
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -210,10 +212,24 @@ func TestStdoutToDevNullIsAllowed(t *testing.T) {
 	}
 }
 
+// osNotFound returns the OS's own wording for a missing path, which differs
+// by platform ("no such file or directory" vs "The system cannot find the file specified.").
+func osNotFound(t *testing.T, path string) string {
+	t.Helper()
+	_, err := os.Stat(path)
+	var pe *fs.PathError
+	if !errors.As(err, &pe) {
+		t.Fatalf("stat %s: want a PathError, got %v", path, err)
+	}
+	return pe.Err.Error()
+}
+
 func TestSpecProblemsExitOneWithTheReason(t *testing.T) {
 	dir := t.TempDir()
 	bad := filepath.Join(dir, "bad.yaml")
 	os.WriteFile(bad, []byte("openapi: 3.1.0\ncomponents:\n  schemas:\n    A: {$ref: 'other.yaml#/A'}\n"), 0o644)
+	missing := filepath.Join(dir, "missing.yaml")
+	noDir := filepath.Join(dir, "no", "such", "dir.docx")
 	cases := []struct {
 		args []string
 		in   string
@@ -221,8 +237,8 @@ func TestSpecProblemsExitOneWithTheReason(t *testing.T) {
 	}{
 		{[]string{"render", bad, "-o", filepath.Join(dir, "a.docx")}, "", "bad.yaml: line 4: $ref \"other.yaml#/A\": open "},
 		{[]string{"render", "-", "-o", filepath.Join(dir, "b.docx")}, "swagger: '2.0'\n", "stdin: line 1: this is a Swagger 2.0 document"},
-		{[]string{"render", filepath.Join(dir, "missing.yaml"), "-o", filepath.Join(dir, "c.docx")}, "", "missing.yaml: no such file or directory"},
-		{[]string{"render", aur, "-o", filepath.Join(dir, "no", "such", "dir.docx")}, "", "no such file or directory"},
+		{[]string{"render", missing, "-o", filepath.Join(dir, "c.docx")}, "", "missing.yaml: " + osNotFound(t, missing)},
+		{[]string{"render", aur, "-o", noDir}, "", osNotFound(t, noDir)},
 	}
 	for _, c := range cases {
 		r := cli(t, c.in, c.args...)
