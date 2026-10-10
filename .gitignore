@@ -2,3 +2,6 @@ src/
 pkg/
 *.tar.gz
 *.tar.zst
+node_modules/
+build/
+interior/
