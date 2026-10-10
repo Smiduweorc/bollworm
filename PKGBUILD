@@ -13,7 +13,7 @@ options=('!debug')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
 # Refresh on every pkgver bump with `updpkgsums` (pacman-contrib), once the
 # tag's tarball is published upstream.
-sha256sums=('SKIP')
+sha256sums=('f2a744e62235b1ce10021fe1e6d7d6fbf2fde95137b4f9fbb411a2130bd2a8e7')
 
 prepare() {
 	cd "$pkgname-$pkgver"
