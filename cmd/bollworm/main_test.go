@@ -77,6 +77,10 @@ func TestUsageErrorsExitTwo(t *testing.T) {
 		"unknown flag":    {"render", aur, "-o", "x.docx", "--fast"},
 		"unknown command": {"draw", aur},
 		"bad paper":       {"render", aur, "-o", "x.docx", "--paper", "a3"},
+		"relative base":   {"render", aur, "-o", "x.docx", "--link-base", "/docs/"},
+		"ftp base":        {"render", aur, "-o", "x.docx", "--link-base", "ftp://example.com/"},
+		"imports on json": {"render", aur, "-o", "x.docx", "--include-imports"},
+		"toc depth 4":     {"render", aur, "-o", "x.docx", "--toc-depth", "4"},
 	}
 	for name, args := range cases {
 		r := cli(t, "", args...)
@@ -95,7 +99,9 @@ func TestUsageErrorsExitTwo(t *testing.T) {
 
 func TestRenderWritesTheFileQuietly(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "aur.docx")
-	r := cli(t, "", "render", aur, "-o", out)
+	// The AUR's description links to /rpc/olddoc.html, which the base
+	// makes a real link; without it the run warns.
+	r := cli(t, "", "render", aur, "-o", out, "--link-base", "https://aur.archlinux.org/", "--strict")
 	if r.code != 0 || r.stdout != "" || r.stderr != "" {
 		t.Fatalf("%+v", r)
 	}
@@ -194,14 +200,14 @@ func TestOutputCannotBeTheInput(t *testing.T) {
 
 func TestStdinAndStdout(t *testing.T) {
 	src, _ := os.ReadFile(aur)
-	r := cli(t, string(src), "render", "-", "-o", "-")
+	r := cli(t, string(src), "render", "-", "-o", "-", "--link-base", "https://aur.archlinux.org/")
 	if r.code != 0 || r.stderr != "" {
 		t.Fatalf("%+v", r)
 	}
 	isDocx(t, []byte(r.stdout))
 
 	out := filepath.Join(t.TempDir(), "file.docx")
-	cli(t, "", "render", aur, "-o", out)
+	cli(t, "", "render", aur, "-o", out, "--link-base", "https://aur.archlinux.org/")
 	file, _ := os.ReadFile(out)
 	if !bytes.Equal(file, []byte(r.stdout)) {
 		t.Error("stdin to stdout should give the same bytes as file to file")
@@ -269,4 +275,59 @@ func TestCompletionScripts(t *testing.T) {
 			t.Errorf("%s: exit %d, %d bytes", sh, r.code, len(r.stdout))
 		}
 	}
+}
+
+func TestWarningsAndStrict(t *testing.T) {
+	dir := t.TempDir()
+	in := filepath.Join(dir, "api.yaml")
+	mustWrite(t, in, []byte("openapi: 3.1.0\ninfo: {title: T, version: '1'}\npaths:\n  /a: {get: {operationId: x, responses: {}}, post: {operationId: x, responses: {}}}\n"))
+	out := filepath.Join(dir, "api.docx")
+
+	r := cli(t, "", "render", in, "-o", out)
+	want := "bollworm: warning: " + in + `: line 4: operationId "x" is used by more than one operation`
+	if r.code != 0 || !strings.HasPrefix(r.stderr, want) {
+		t.Errorf("warning: %+v", r)
+	}
+	if _, err := os.Stat(out); err != nil {
+		t.Error("a warning stopped the document being written")
+	}
+
+	strictOut := filepath.Join(dir, "strict.docx")
+	r = cli(t, "", "render", in, "-o", strictOut, "--strict")
+	if r.code != exitFailure || !strings.Contains(r.stderr, "1 warning, and --strict is set; nothing was written") {
+		t.Errorf("strict: %+v", r)
+	}
+	if _, err := os.Stat(strictOut); err == nil {
+		t.Error("--strict wrote a file")
+	}
+}
+
+func TestEveryErrorIsOnALineOfItsOwn(t *testing.T) {
+	dir := t.TempDir()
+	in := filepath.Join(dir, "api.yaml")
+	mustWrite(t, in, []byte("openapi: 3.1.0\ninfo: {title: T, version: '1'}\ncomponents:\n  schemas:\n    A: {$ref: '#/x'}\n    B: {$ref: '#/y'}\n"))
+	r := cli(t, "", "render", in, "-o", filepath.Join(dir, "out.docx"))
+	lines := strings.Split(strings.TrimSpace(r.stderr), "\n")
+	if r.code != exitFailure || len(lines) != 2 || !strings.HasPrefix(lines[0], "bollworm: "+in+": line 5:") || !strings.HasPrefix(lines[1], "bollworm: "+in+": line 6:") {
+		t.Errorf("%+v", r)
+	}
+}
+
+func TestTOCDepthDefaultsToEndpoints(t *testing.T) {
+	r := cli(t, "", "render", aur, "-o", "-", "--toc-depth", "2")
+	d := cli(t, "", "render", aur, "-o", "-")
+	if r.code != 0 || d.code != 0 || r.stdout != d.stdout {
+		t.Error("the default --toc-depth is not 2")
+	}
+	if c := cli(t, "", "__complete", "render", aur, "--toc-depth", ""); !strings.Contains(c.stdout, "1\n2\n3\n") {
+		t.Errorf("toc-depth completions: %q", c.stdout)
+	}
+}
+
+func TestWarningsStayOffStdout(t *testing.T) {
+	r := cli(t, "", "render", aur, "-o", "-")
+	if r.code != 0 || !strings.HasPrefix(r.stderr, "bollworm: warning: "+aur+`: relative link "/rpc/olddoc.html" is printed as text`) {
+		t.Fatalf("%+v", r.stderr)
+	}
+	isDocx(t, []byte(r.stdout))
 }
