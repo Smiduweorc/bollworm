@@ -2,6 +2,35 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.0] - 2026-10-25
+
+### Bug Fixes
+
+- Removed items that should not have been committed
+- Fact check on docx format
+- Drop the duplicate TOC3 style definition
+
+### Documentation
+
+- Rewrite the readme around all three spec formats
+- Slim the readme and move reference material into docs/
+
+### Features
+
+- Let the contents list down to a chosen heading level
+- Retry a fetch that fails in a way that may pass
+- Read more of the spec, report every error, and warn
+- Read field behaviors and custom options, and warn
+- Lay out the new spec parts and resolve links on request
+- Add --strict, --link-base, --toc-depth and --include-imports
+- Add --reference-doc to take styles from a .docx
+
+### Miscellaneous Tasks
+
+- Update PKGBUILD to 0.2.0
+- Build artifacts
+- Adjusted table width and added fallback styling for libreoffice
+
 ## [0.2.0] - 2026-10-25
 
 ### Features
