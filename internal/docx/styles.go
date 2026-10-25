@@ -111,3 +111,10 @@ const settings = xmlHeader + `<w:settings ` + nsW + `>` +
 	`<w:compatSetting w:name="doNotFlipMirrorIndents" w:uri="http://schemas.microsoft.com/office/word" w:val="1"/>` +
 	`</w:compat>` +
 	`</w:settings>`
+
+// Describes Aptos as a sans-serif family. Where Aptos is missing LibreOffice
+// falls back to a serif font without this; with it, to a sans one.
+const fontTable = xmlHeader + `<w:fonts ` + nsW + `>` +
+	`<w:font w:name="Aptos"><w:panose1 w:val="020B0004020202020204"/><w:charset w:val="00"/><w:family w:val="swiss"/><w:pitch w:val="variable"/></w:font>` +
+	`<w:font w:name="Aptos Display"><w:panose1 w:val="020B0004020202020204"/><w:charset w:val="00"/><w:family w:val="swiss"/><w:pitch w:val="variable"/></w:font>` +
+	`</w:fonts>`

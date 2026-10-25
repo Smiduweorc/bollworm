@@ -401,7 +401,7 @@ func (r *renderer) operation(op *spec.Operation, webhook bool) {
 
 	if len(ep.Parameters) > 0 {
 		r.doc.Heading(3, "Parameters", "")
-		t := docx.Table{Widths: []int{5, 3, 5, 3, 9}, Header: []string{"Name", "In", "Type", "Required", "Description"}}
+		t := docx.Table{Widths: []int{5, 3, 5, 4, 8}, Header: []string{"Name", "In", "Type", "Required", "Description"}}
 		for _, p := range ep.Parameters {
 			notes := r.notes(p.Schema)
 			if p.Deprecated {
@@ -738,7 +738,7 @@ func properties(s *spec.Schema) []*spec.Property {
 }
 
 func (r *renderer) fieldTable(s *spec.Schema) {
-	t := docx.Table{Widths: []int{5, 5, 3, 9}, Header: []string{"Field", "Type", "Required", "Description"}}
+	t := docx.Table{Widths: []int{5, 5, 4, 8}, Header: []string{"Field", "Type", "Required", "Description"}}
 	for _, f := range r.fields(s) {
 		t.Rows = append(t.Rows, []docx.Cell{
 			{{Inlines: []docx.Inline{{Text: f.name, Code: true}}}},

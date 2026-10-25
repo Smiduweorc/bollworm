@@ -33,7 +33,7 @@ func (r *renderer) jsonrpc(op *spec.Operation) {
 	} else {
 		r.doc.Heading(3, "Params", "")
 		r.doc.Para(docx.Para{Inlines: []docx.Inline{{Text: paramStructureText[m.ParamStructure]}}})
-		t := docx.Table{Widths: []int{1, 5, 5, 3, 9}, Header: []string{"#", "Name", "Type", "Required", "Description"}}
+		t := docx.Table{Widths: []int{1, 5, 5, 4, 8}, Header: []string{"#", "Name", "Type", "Required", "Description"}}
 		for i, p := range m.Params {
 			t.Rows = append(t.Rows, []docx.Cell{
 				{{Inlines: []docx.Inline{{Text: strconv.Itoa(i + 1)}}}},
