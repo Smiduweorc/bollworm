@@ -2,7 +2,6 @@ package render
 
 import (
 	"strconv"
-	"strings"
 
 	"github.com/Smiduweorc/bollworm/internal/docx"
 	"github.com/Smiduweorc/bollworm/internal/spec"
@@ -16,17 +15,12 @@ var streamingText = map[spec.Streaming]string{
 }
 
 func (r *renderer) rpc(op *spec.Operation) {
-	title := operationTitle(op)
-	if r.titles[title] > 1 {
-		service := op.RPC.Service
-		title += " (" + service[strings.LastIndex(service, ".")+1:] + ")"
-	}
-	r.doc.Heading(2, title, "")
+	r.doc.Heading(2, r.sectionTitle(op), r.ops[op])
 	r.doc.Para(docx.Para{Style: "Endpoint", Inlines: []docx.Inline{{Text: "RPC", Bold: true}, {Text: "  /" + op.RPC.Service + "/" + op.RPC.Method}}})
 	if op.Deprecated {
 		r.doc.Para(docx.Para{Inlines: []docx.Inline{{Text: "Deprecated. ", Bold: true}, {Text: "This method is still served but may be removed; avoid it in new code."}}})
 	}
-	r.write(markdown(r.doc, op.Description))
+	r.write(r.markdown(op.Description))
 
 	message := func(label string, s *spec.Schema, stream bool) {
 		in := []docx.Inline{{Text: label, Bold: true}}
@@ -38,6 +32,7 @@ func (r *renderer) rpc(op *spec.Operation) {
 	message("Request: ", op.Input, op.Streaming == spec.ClientStreaming || op.Streaming == spec.BidiStreaming)
 	message("Response: ", op.Output, op.Streaming == spec.ServerStreaming || op.Streaming == spec.BidiStreaming)
 	r.doc.Para(docx.Para{Inlines: []docx.Inline{{Text: "Streaming: ", Bold: true}, {Text: streamingText[op.Streaming]}}})
+	r.options(op.Options)
 
 	if len(op.RPC.Bindings) == 0 {
 		return
@@ -70,12 +65,16 @@ func (r *renderer) rpc(op *spec.Operation) {
 // protoModel writes the body of a message's or an enum's section. Every
 // nested message is a model of its own, so the fields table is one level.
 func (r *renderer) protoModel(m *spec.Schema) {
+	r.options(m.Options)
 	if len(m.Values) > 0 {
 		t := docx.Table{Widths: []int{6, 2, 9}, Header: []string{"Value", "Number", "Description"}}
 		for _, v := range m.Values {
 			var notes []string
 			if v.Deprecated {
 				notes = []string{"Deprecated."}
+			}
+			for _, o := range v.Options {
+				notes = append(notes, "Option "+o+".")
 			}
 			t.Rows = append(t.Rows, []docx.Cell{
 				{{Inlines: []docx.Inline{{Text: v.Name, Code: true}}}},
@@ -107,4 +106,17 @@ func (r *renderer) protoModel(m *spec.Schema) {
 		})
 	}
 	r.doc.Table(t)
+}
+
+// options lists protobuf options the manual has no words of its own for,
+// such as validation rules, as they are written in the .proto file.
+func (r *renderer) options(opts []string) {
+	if len(opts) == 0 {
+		return
+	}
+	r.doc.Para(docx.Para{Inlines: []docx.Inline{{Text: "Options:", Bold: true}}})
+	id := r.doc.NewList(false, 1)
+	for _, o := range opts {
+		r.doc.Para(docx.Para{Style: "ListParagraph", List: &docx.ListItem{ID: id}, Inlines: []docx.Inline{{Text: o, Code: true}}})
+	}
 }

@@ -5,7 +5,10 @@
 package render
 
 import (
+	"fmt"
+	"hash/fnv"
 	"net/http"
+	"net/url"
 	"regexp"
 	"slices"
 	"strconv"
@@ -13,30 +16,65 @@ import (
 
 	"github.com/Smiduweorc/bollworm/internal/docx"
 	"github.com/Smiduweorc/bollworm/internal/spec"
+	"gopkg.in/yaml.v3"
 )
 
-// Render returns the .docx bytes for s on the given paper.
-func Render(s *spec.Spec, paper docx.Paper) ([]byte, error) {
+type Options struct {
+	Paper docx.Paper
+	// LinkBase is the URL relative links in descriptions are resolved
+	// against. When it is nil, a relative link is printed after its text.
+	LinkBase *url.URL
+	// TOCDepth is the deepest heading level the contents list: 1 for
+	// chapters, 2 (the default, when 0) for each endpoint, 3 for their
+	// parts as well.
+	TOCDepth int
+}
+
+// Render returns the .docx bytes for s, and warnings about what the
+// document could not show as the spec wrote it.
+func Render(s *spec.Spec, opts Options) ([]byte, []string, error) {
 	title := strings.TrimSpace(s.Title)
 	if title == "" {
 		title = "API reference"
 	}
 	r := &renderer{
 		spec:    s,
-		doc:     docx.New(title, paper),
+		doc:     docx.New(title, opts.Paper),
 		models:  map[*spec.Schema]string{},
 		schemes: map[string]string{},
 		titles:  map[string]int{},
+		ops:     map[*spec.Operation]string{},
+		linker:  &linker{base: opts.LinkBase},
+	}
+	if opts.TOCDepth > 0 {
+		r.doc.TOCDepth = opts.TOCDepth
+	}
+	used := map[string]bool{}
+	note := func(op *spec.Operation) {
+		if r.ops[op] != "" {
+			return
+		}
+		r.titles[operationTitle(op)]++
+		r.ops[op] = anchor("Op_", firstNonEmpty(op.ID, operationTitle(op)), used)
+		if op.HTTP == nil {
+			return
+		}
+		// A callback's requests have no heading, but links may still
+		// point at them.
+		for _, cb := range op.HTTP.Callbacks {
+			for _, cop := range cb.Operations {
+				r.ops[cop] = anchor("Op_", firstNonEmpty(cop.ID, operationTitle(cop)), used)
+			}
+		}
 	}
 	for _, g := range s.Groups {
 		for _, op := range g.Operations {
-			r.titles[operationTitle(op)]++
+			note(op)
 		}
 	}
 	for _, op := range s.Webhooks {
-		r.titles[operationTitle(op)]++
+		note(op)
 	}
-	used := map[string]bool{}
 	for _, m := range s.Models {
 		r.models[m] = anchor("Model_", m.Name, used)
 	}
@@ -60,7 +98,12 @@ func Render(s *spec.Spec, paper docx.Paper) ([]byte, error) {
 		}
 	}
 	r.dataModels()
-	return r.doc.Bytes()
+	var warnings []string
+	for _, l := range r.linker.unresolved {
+		warnings = append(warnings, fmt.Sprintf("relative link %q is printed as text; pass --link-base to make it a link", l))
+	}
+	data, err := r.doc.Bytes()
+	return data, warnings, err
 }
 
 type renderer struct {
@@ -72,16 +115,45 @@ type renderer struct {
 	schemes map[string]string
 	// titles counts how many operations share each section title.
 	titles map[string]int
+	// ops maps each operation to the bookmark of its section.
+	ops    map[*spec.Operation]string
+	linker *linker
+}
+
+func (r *renderer) markdown(src string) []block {
+	return markdown(r.doc, r.linker, src)
+}
+
+func (r *renderer) seeAlso(ed *spec.ExternalDocs) {
+	if ed == nil {
+		return
+	}
+	text := strings.TrimSuffix(strings.TrimSpace(ed.Description), ".")
+	in := []docx.Inline{{Text: "See also: ", Bold: true}}
+	if text != "" && text != ed.URL {
+		in = append(in, link(text, ed.URL)...)
+		in = append(in, docx.Inline{Text: " ("}, docx.Inline{Text: ed.URL, Code: true}, docx.Inline{Text: ")."})
+	} else {
+		in = append(in, link(ed.URL, ed.URL)...)
+		in = append(in, docx.Inline{Text: "."})
+	}
+	r.doc.Para(docx.Para{Inlines: in})
 }
 
 var nonWord = regexp.MustCompile(`[^A-Za-z0-9_]`)
 
 // anchor builds a bookmark name Word accepts: a letter first, only letters,
 // digits and underscores, at most 40 characters, and unique in the document.
+//
+// A name too long to fit is cut and given a hash of the whole of it, so two
+// long names that start alike still get different bookmarks, and the same
+// name gets the same bookmark however the document around it changes.
 func anchor(prefix, name string, used map[string]bool) string {
 	base := prefix + nonWord.ReplaceAllString(name, "_")
 	if len(base) > 40 {
-		base = base[:40]
+		h := fnv.New32a()
+		h.Write([]byte(name))
+		base = fmt.Sprintf("%s_%08x", base[:31], h.Sum32())
 	}
 	a := base
 	for i := 2; used[a]; i++ {
@@ -128,11 +200,12 @@ func (r *renderer) titlePage(title string) {
 
 func (r *renderer) introduction() {
 	s := r.spec
-	if strings.TrimSpace(s.Description) == "" && len(s.Servers) == 0 && len(s.Files) == 0 {
+	if strings.TrimSpace(s.Description) == "" && len(s.Servers) == 0 && len(s.Files) == 0 && s.ExternalDocs == nil {
 		return
 	}
 	r.doc.Heading(1, "Introduction", "")
-	r.write(markdown(r.doc, s.Description))
+	r.write(r.markdown(s.Description))
+	r.seeAlso(s.ExternalDocs)
 	if len(s.Files) > 0 {
 		r.doc.Heading(2, "Files", "")
 		r.doc.Para(docx.Para{Inlines: []docx.Inline{{Text: "This document describes the services and messages in these files."}}})
@@ -159,15 +232,23 @@ func (r *renderer) introduction() {
 	default:
 		r.doc.Para(docx.Para{Inlines: []docx.Inline{{Text: "Requests can be made to any of the following base URLs. Paths in this document are relative to them."}}})
 	}
+	r.serverTable(s.Servers)
+}
+
+func (r *renderer) serverTable(servers []spec.Server) {
 	t := docx.Table{Widths: []int{5, 4}, Header: []string{"URL", "Description"}}
-	for _, sv := range s.Servers {
+	for _, sv := range servers {
 		t.Rows = append(t.Rows, []docx.Cell{
 			{{Inlines: []docx.Inline{{Text: sv.URL, Code: true}}}},
 			r.cell(sv.Description, nil),
 		})
 	}
 	r.doc.Table(t)
-	for _, sv := range s.Servers {
+	r.serverVariables(servers)
+}
+
+func (r *renderer) serverVariables(servers []spec.Server) {
+	for _, sv := range servers {
 		if len(sv.Variables) == 0 {
 			continue
 		}
@@ -207,7 +288,7 @@ func (r *renderer) authentication() {
 	for _, sc := range s.Schemes {
 		r.doc.Heading(2, sc.Name, r.schemes[sc.Name])
 		r.doc.Para(docx.Para{Inlines: schemeSummary(sc)})
-		r.write(markdown(r.doc, sc.Description))
+		r.write(r.markdown(sc.Description))
 		if len(sc.Flows) == 0 {
 			continue
 		}
@@ -341,10 +422,43 @@ func (r *renderer) group(g spec.Group) {
 		}
 	}
 	r.doc.Heading(1, name, "")
-	r.write(markdown(r.doc, g.Description))
+	r.write(r.markdown(g.Description))
+	r.seeAlso(g.ExternalDocs)
+	if len(g.Also) > 0 {
+		what := "endpoints"
+		if r.spec.Format == spec.OpenRPC {
+			what = "methods"
+		}
+		if len(g.Operations) > 0 {
+			r.doc.Para(docx.Para{Inlines: []docx.Inline{{Text: "These " + what + " belong here too, and are described in the chapter of their first tag:"}}})
+		} else {
+			r.doc.Para(docx.Para{Inlines: []docx.Inline{{Text: "These " + what + " belong here, and are described in the chapter of their first tag:"}}})
+		}
+		id := r.doc.NewList(false, 1)
+		for _, op := range g.Also {
+			r.doc.Para(docx.Para{Style: "ListParagraph", List: &docx.ListItem{ID: id}, Inlines: []docx.Inline{{Text: r.sectionTitle(op), Anchor: r.ops[op]}}})
+		}
+	}
 	for _, op := range g.Operations {
 		r.operation(op, false)
 	}
+}
+
+// sectionTitle is the heading an operation's section gets: its title, told
+// apart from others with the same one.
+func (r *renderer) sectionTitle(op *spec.Operation) string {
+	title := operationTitle(op)
+	if r.titles[title] <= 1 {
+		return title
+	}
+	switch {
+	case op.HTTP != nil:
+		return title + " (" + op.HTTP.Method + ")"
+	case op.RPC != nil:
+		service := op.RPC.Service
+		return title + " (" + service[strings.LastIndex(service, ".")+1:] + ")"
+	}
+	return title + " (" + op.ID + ")"
 }
 
 func operationTitle(op *spec.Operation) string {
@@ -355,8 +469,18 @@ func operationTitle(op *spec.Operation) string {
 	if title == "" && op.HTTP != nil {
 		title = op.HTTP.Method + " " + op.HTTP.Path
 	}
-	return strings.TrimSuffix(strings.TrimSpace(title), ".")
+	title = strings.TrimSpace(title)
+	// A summary written as a sentence loses its full stop, as headings do;
+	// an ellipsis or an abbreviation such as "etc." keeps it.
+	if strings.HasSuffix(title, ".") && !strings.HasSuffix(title, "..") && !abbreviation.MatchString(title) {
+		title = strings.TrimSuffix(title, ".")
+	}
+	return title
 }
+
+// abbreviation matches a title ending in a short abbreviation: "etc.",
+// "e.g.", "Inc.", "v2.".
+var abbreviation = regexp.MustCompile(`(?:^|[\s(])(?:etc|e\.g|i\.e|vs|approx|Inc|Ltd|Co|Corp|[A-Za-z]|v\d+)\.$`)
 
 // operation writes one endpoint. For a webhook, Path is the webhook's name
 // rather than a path on the API.
@@ -370,25 +494,43 @@ func (r *renderer) operation(op *spec.Operation, webhook bool) {
 		return
 	}
 	ep := op.HTTP
-	title := operationTitle(op)
 	// Two endpoints with one summary would be two identical lines in the
 	// contents; the method tells them apart.
-	if r.titles[title] > 1 {
-		title += " (" + ep.Method + ")"
-	}
-	r.doc.Heading(2, title, "")
+	r.doc.Heading(2, r.sectionTitle(op), r.ops[op])
 	if webhook {
 		r.doc.Para(docx.Para{Style: "Endpoint", Inlines: []docx.Inline{{Text: ep.Method, Bold: true}, {Text: "  to your webhook URL"}}})
 		r.doc.Para(docx.Para{Inlines: []docx.Inline{{Text: "Webhook: ", Bold: true}, {Text: ep.Path, Code: true}}})
 	} else {
 		r.doc.Para(docx.Para{Style: "Endpoint", Inlines: []docx.Inline{{Text: ep.Method, Bold: true}, {Text: "  " + ep.Path}}})
 	}
+	r.endpointBody(op, func(text string) { r.doc.Heading(3, text, "") }, !webhook)
+
+	for _, cb := range ep.Callbacks {
+		r.doc.Heading(3, "Callback: "+cb.Name, "")
+		r.doc.Para(docx.Para{Inlines: []docx.Inline{{Text: "The API sends this request to a URL taken from the call above, which your server receives."}}})
+		for _, cop := range cb.Operations {
+			in := []docx.Inline{{Text: cop.HTTP.Method, Bold: true}, {Text: "  " + cop.HTTP.Path}}
+			if t := operationTitle(cop); cop.Summary != "" || cop.ID != "" {
+				in = append([]docx.Inline{{Text: t + ": ", Bold: true}}, in...)
+			}
+			r.doc.Para(docx.Para{Style: "Endpoint", Inlines: in, Bookmark: r.ops[cop]})
+			r.endpointBody(cop, func(text string) { r.doc.Para(docx.Para{Style: "Label", Inlines: []docx.Inline{{Text: text}}}) }, false)
+		}
+	}
+}
+
+// endpointBody writes what follows an endpoint's method and path. sub
+// writes a subsection title: a heading in an operation's own section, a
+// label inside a callback. auth says whether the document's schemes apply.
+func (r *renderer) endpointBody(op *spec.Operation, sub func(string), auth bool) {
+	ep := op.HTTP
 	if op.Deprecated {
 		r.doc.Para(docx.Para{Inlines: []docx.Inline{{Text: "Deprecated. ", Bold: true}, {Text: "This endpoint is still served but may be removed; avoid it in new code."}}})
 	}
-	r.write(markdown(r.doc, op.Description))
+	r.write(r.markdown(op.Description))
+	r.seeAlso(op.ExternalDocs)
 
-	if ep.Security != nil || len(r.spec.Schemes) > 0 && !webhook {
+	if ep.Security != nil || len(r.spec.Schemes) > 0 && auth {
 		in := []docx.Inline{{Text: "Authentication: ", Bold: true}}
 		if len(ep.Security) == 0 {
 			in = append(in, docx.Inline{Text: "none."})
@@ -400,7 +542,7 @@ func (r *renderer) operation(op *spec.Operation, webhook bool) {
 	}
 
 	if len(ep.Parameters) > 0 {
-		r.doc.Heading(3, "Parameters", "")
+		sub("Parameters")
 		t := docx.Table{Widths: []int{5, 3, 5, 4, 8}, Header: []string{"Name", "In", "Type", "Required", "Description"}}
 		for _, p := range ep.Parameters {
 			notes := r.notes(p.Schema)
@@ -411,6 +553,12 @@ func (r *renderer) operation(op *spec.Operation, webhook bool) {
 				if ex, ok := inlineExample(p.Example); ok {
 					notes = append(notes, "Example: "+ex+".")
 				}
+			}
+			if p.ContentType != "" {
+				notes = append(notes, "Sent as "+p.ContentType+".")
+			}
+			if ser := serialization(p.Style, p.Explode); ser != "" {
+				notes = append(notes, upperFirst(ser)+".")
 			}
 			t.Rows = append(t.Rows, []docx.Cell{
 				{{Inlines: []docx.Inline{{Text: p.Name, Code: true}}}},
@@ -424,39 +572,25 @@ func (r *renderer) operation(op *spec.Operation, webhook bool) {
 	}
 
 	if b := ep.RequestBody; b != nil {
-		r.doc.Heading(3, "Request body", "")
+		sub("Request body")
 		if b.Required {
 			r.doc.Para(docx.Para{Inlines: []docx.Inline{{Text: "A request body is required."}}})
 		} else {
 			r.doc.Para(docx.Para{Inlines: []docx.Inline{{Text: "The request body is optional."}}})
 		}
-		r.write(markdown(r.doc, b.Description))
+		r.write(r.markdown(b.Description))
 		for _, c := range mergeContent(b.Content) {
 			r.content(c, "Example request body")
 		}
 	}
 
 	if len(ep.Responses) > 0 {
-		r.doc.Heading(3, "Responses", "")
+		sub("Responses")
 		t := docx.Table{Widths: []int{3, 7, 5}, Header: []string{"Status", "Description", "Body"}}
 		for _, resp := range ep.Responses {
 			var notes []string
 			for _, h := range resp.Headers {
-				note := "Header " + h.Name
-				var about []string
-				if t := plainType(h.Schema); t != "" {
-					about = append(about, t)
-				}
-				if h.Required {
-					about = append(about, "always sent")
-				}
-				if len(about) > 0 {
-					note += " (" + strings.Join(about, ", ") + ")"
-				}
-				if h.Description != "" {
-					note += ": " + strings.TrimSuffix(h.Description, ".")
-				}
-				notes = append(notes, note+".")
+				notes = append(notes, headerNote(h))
 			}
 			var body []docx.Inline
 			for i, c := range mergeContent(resp.Content) {
@@ -488,8 +622,93 @@ func (r *renderer) operation(op *spec.Operation, webhook bool) {
 				}
 				r.responseDetail(resp.Status, label, c)
 			}
+			r.links(resp)
 		}
 	}
+}
+
+func headerNote(h *spec.Header) string {
+	note := "Header " + h.Name
+	var about []string
+	if t := plainType(h.Schema); t != "" {
+		about = append(about, t)
+	}
+	if h.Required {
+		about = append(about, "always sent")
+	}
+	if len(about) > 0 {
+		note += " (" + strings.Join(about, ", ") + ")"
+	}
+	if h.Description != "" {
+		note += ": " + strings.TrimSuffix(h.Description, ".")
+	}
+	return note + "."
+}
+
+// linkValue is a link's value as the spec wrote it: a runtime expression or
+// a string as it is, anything else as JSON in the author's key order.
+func linkValue(n *yaml.Node) []docx.Inline {
+	n = deref(n)
+	if n.Kind == yaml.ScalarNode && n.ShortTag() == "!!str" {
+		return []docx.Inline{{Text: n.Value, Code: true}}
+	}
+	if v, ok := inlineExample(n); ok {
+		return []docx.Inline{{Text: v, Code: true}}
+	}
+	// Too long for a compact line: the indented JSON, folded onto one.
+	lines := strings.Split(strings.TrimSpace(exampleJSON(n)), "\n")
+	for i, l := range lines {
+		lines[i] = strings.TrimSpace(l)
+	}
+	return []docx.Inline{{Text: strings.Join(lines, " "), Code: true}}
+}
+
+// serialization describes a parameter's or a form field's style and
+// explode, or returns "" when the spec leaves both to their defaults.
+func serialization(style string, explode *bool) string {
+	var parts []string
+	if style != "" {
+		parts = append(parts, "serialized with style "+style)
+	}
+	if explode != nil {
+		if *explode {
+			parts = append(parts, "exploded: each value or property is sent as its own parameter")
+		} else {
+			parts = append(parts, "not exploded: values are sent comma-separated in one parameter")
+		}
+	}
+	return strings.Join(parts, ", ")
+}
+
+func (r *renderer) links(resp *spec.Response) {
+	if len(resp.Links) == 0 {
+		return
+	}
+	r.doc.Para(docx.Para{Style: "Label", Inlines: []docx.Inline{{Text: "Links from the " + resp.Status + " response"}}})
+	t := docx.Table{Widths: []int{4, 5, 7, 6}, Header: []string{"Link", "Operation", "Values passed", "Description"}}
+	for _, l := range resp.Links {
+		target := []docx.Inline{{Text: firstNonEmpty(l.OperationID, l.OperationRef), Code: true}}
+		if l.Target != nil {
+			target = []docx.Inline{{Text: r.sectionTitle(l.Target), Anchor: r.ops[l.Target]}}
+		}
+		var values docx.Cell
+		for _, p := range l.Parameters {
+			values = append(values, docx.Para{Inlines: append([]docx.Inline{{Text: p.Name, Code: true}, {Text: " = "}}, linkValue(p.Value)...)})
+		}
+		if l.RequestBody != nil {
+			values = append(values, docx.Para{Inlines: append([]docx.Inline{{Text: "Request body = "}}, linkValue(l.RequestBody)...)})
+		}
+		if len(values) == 0 {
+			values = docx.Cell{{Inlines: []docx.Inline{{Text: "None"}}}}
+		}
+		t.Rows = append(t.Rows, []docx.Cell{
+			{{Inlines: []docx.Inline{{Text: l.Name}}}},
+			{{Inlines: target}},
+			values,
+			r.cell(l.Description, nil),
+		})
+	}
+	r.doc.Table(t)
 }
 
 // responseDetail prints what the responses table cannot hold: the fields of
@@ -527,7 +746,36 @@ func (r *renderer) content(c content, label string) {
 	if table {
 		r.fieldTable(c.schema)
 	}
+	r.encoding(c.encoding)
 	r.examples(c, label)
+}
+
+// encoding describes how the fields of a form or multipart body are sent.
+func (r *renderer) encoding(encs []spec.Encoding) {
+	if len(encs) == 0 {
+		return
+	}
+	r.doc.Para(docx.Para{Style: "Label", Inlines: []docx.Inline{{Text: "How fields are sent"}}})
+	t := docx.Table{Widths: []int{4, 5, 8}, Header: []string{"Field", "Content type", "Notes"}}
+	for _, e := range encs {
+		var notes []string
+		if ser := serialization(e.Style, e.Explode); ser != "" {
+			notes = append(notes, upperFirst(ser)+".")
+		}
+		for _, h := range e.Headers {
+			notes = append(notes, headerNote(h))
+		}
+		ct := []docx.Inline{{Text: "Default"}}
+		if e.ContentType != "" {
+			ct = []docx.Inline{{Text: e.ContentType, Code: true}}
+		}
+		t.Rows = append(t.Rows, []docx.Cell{
+			{{Inlines: []docx.Inline{{Text: e.Property, Code: true}}}},
+			{{Inlines: ct}},
+			{{Inlines: []docx.Inline{{Text: strings.Join(notes, " ")}}}},
+		})
+	}
+	r.doc.Table(t)
 }
 
 func (r *renderer) examples(c content, label string) {
@@ -572,6 +820,7 @@ type content struct {
 	types    []string
 	schema   *spec.Schema
 	examples []spec.Example
+	encoding []spec.Encoding
 }
 
 // mergeContent folds media types with the same schema into one entry, so an
@@ -581,14 +830,14 @@ func mergeContent(mts []*spec.MediaType) []content {
 	for _, mt := range mts {
 		merged := false
 		for i := range out {
-			if out[i].schema == mt.Schema && len(mt.Examples) == 0 {
+			if out[i].schema == mt.Schema && len(mt.Examples) == 0 && len(mt.Encoding) == 0 {
 				out[i].types = append(out[i].types, mt.Type)
 				merged = true
 				break
 			}
 		}
 		if !merged {
-			out = append(out, content{types: []string{mt.Type}, schema: mt.Schema, examples: mt.Examples})
+			out = append(out, content{types: []string{mt.Type}, schema: mt.Schema, examples: mt.Examples, encoding: mt.Encoding})
 		}
 	}
 	return out
@@ -628,7 +877,8 @@ func (r *renderer) dataModels() {
 		if m.Deprecated {
 			r.doc.Para(docx.Para{Inlines: []docx.Inline{{Text: "Deprecated.", Bold: true}}})
 		}
-		r.write(markdown(r.doc, m.Description))
+		r.write(r.markdown(m.Description))
+		r.seeAlso(m.ExternalDocs)
 		if r.proto() {
 			r.protoModel(m)
 			continue
@@ -645,6 +895,10 @@ func (r *renderer) dataModels() {
 				r.doc.Para(docx.Para{Style: "ListParagraph", List: &docx.ListItem{ID: id}, Inlines: r.typeOf(a)})
 			}
 		}
+		r.discriminator(m)
+		if x := xmlNote(m.XML); x != "" {
+			r.doc.Para(docx.Para{Inlines: []docx.Inline{{Text: x}}})
+		}
 
 		if len(r.fields(m)) > 0 {
 			r.fieldTable(m)
@@ -656,11 +910,73 @@ func (r *renderer) dataModels() {
 			}
 			r.doc.Para(docx.Para{Inlines: in})
 		}
-		if m.Example != nil {
-			r.doc.Para(docx.Para{Style: "Label", Inlines: []docx.Inline{{Text: "Example"}}})
-			r.doc.Code(exampleJSON(m.Example))
+		if m.Closed && len(r.fields(m)) > 0 {
+			r.doc.Para(docx.Para{Inlines: []docx.Inline{{Text: "No properties other than these are allowed."}}})
+		}
+		for i, ex := range m.Examples {
+			label := "Example"
+			if len(m.Examples) > 1 {
+				label += " " + strconv.Itoa(i+1)
+			}
+			r.doc.Para(docx.Para{Style: "Label", Inlines: []docx.Inline{{Text: label}}})
+			r.doc.Code(exampleJSON(ex))
 		}
 	}
+}
+
+// discriminator says which property tells a model's alternatives apart.
+func (r *renderer) discriminator(m *spec.Schema) {
+	d := m.Discriminator
+	if d == nil || d.Property == "" {
+		return
+	}
+	in := []docx.Inline{{Text: "The "}, {Text: d.Property, Code: true}, {Text: " property says which one a value is"}}
+	if len(d.Mapping) == 0 {
+		r.doc.Para(docx.Para{Inlines: append(in, docx.Inline{Text: ": it holds the name of the model."})})
+		return
+	}
+	r.doc.Para(docx.Para{Inlines: append(in, docx.Inline{Text: ":"})})
+	t := docx.Table{Widths: []int{4, 6}, Header: []string{"Value of " + d.Property, "Model"}}
+	for _, c := range d.Mapping {
+		model := []docx.Inline{{Text: c.Ref, Code: true}}
+		if c.Schema != nil {
+			model = r.typeOf(c.Schema)
+		}
+		t.Rows = append(t.Rows, []docx.Cell{
+			{{Inlines: []docx.Inline{{Text: c.Value, Code: true}}}},
+			{{Inlines: model}},
+		})
+	}
+	r.doc.Table(t)
+}
+
+// xmlNote describes how a value is spelled in an XML body, or returns "".
+func xmlNote(x *spec.XML) string {
+	if x == nil {
+		return ""
+	}
+	var parts []string
+	switch {
+	case x.Attribute && x.Name != "":
+		parts = append(parts, "an attribute named "+x.Name)
+	case x.Attribute:
+		parts = append(parts, "an attribute")
+	case x.Name != "":
+		parts = append(parts, "an element named "+x.Name)
+	}
+	if x.Wrapped {
+		parts = append(parts, "wrapped in an outer element")
+	}
+	if x.Prefix != "" {
+		parts = append(parts, "with the prefix "+x.Prefix)
+	}
+	if x.Namespace != "" {
+		parts = append(parts, "in the namespace "+x.Namespace)
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "In XML, " + strings.Join(parts, ", ") + "."
 }
 
 // field is one row of a fields table. Name is a path: nested objects that
@@ -794,6 +1110,9 @@ func (r *renderer) modelOf(s *spec.Schema) *spec.Schema {
 // typeOfInner describes s without linking s itself, which is what a model's
 // own section needs.
 func (r *renderer) typeOfInner(s *spec.Schema) []docx.Inline {
+	if s.Never {
+		return []docx.Inline{{Text: "nothing (no value is allowed)"}}
+	}
 	nullable := slices.Contains(s.Types, "null")
 	var out []docx.Inline
 	switch {
@@ -916,6 +1235,13 @@ func details(s *spec.Schema) []string {
 	if s.WriteOnly {
 		out = append(out, "Write-only: accepted in requests, never returned.")
 	}
+	if s.Closed {
+		out = append(out, "No properties other than the listed ones are allowed.")
+	}
+	out = append(out, s.Notes...)
+	if s.Immutable {
+		out = append(out, "Immutable: set when the resource is created and never changed after.")
+	}
 	if len(s.Enum) > 0 {
 		vals := make([]string, 0, len(s.Enum))
 		for _, e := range s.Enum {
@@ -952,10 +1278,34 @@ func details(s *spec.Schema) []string {
 			out = append(out, "Must not be "+t+".")
 		}
 	}
-	if s.Example != nil {
+	var exs []string
+	for _, ex := range s.Examples {
+		if v, ok := inlineExample(ex); ok {
+			exs = append(exs, v)
+		}
+	}
+	switch {
+	case len(exs) == 1:
+		out = append(out, "Example: "+exs[0]+".")
+	case len(exs) > 1:
+		out = append(out, "Examples: "+strings.Join(exs, ", ")+".")
+	case s.Example != nil:
 		if v, ok := inlineExample(s.Example); ok {
 			out = append(out, "Example: "+v+".")
 		}
+	}
+	if d := s.Discriminator; d != nil && d.Property != "" && s.Name == "" {
+		out = append(out, "The "+d.Property+" property says which alternative a value is.")
+	}
+	// A model's section says these in paragraphs of their own.
+	if x := xmlNote(s.XML); x != "" && s.Name == "" {
+		out = append(out, x)
+	}
+	if ed := s.ExternalDocs; ed != nil && s.Name == "" {
+		out = append(out, "See "+ed.URL+".")
+	}
+	for _, o := range s.Options {
+		out = append(out, "Option "+o+".")
 	}
 	return out
 }
@@ -1010,7 +1360,7 @@ func lengthRange(min, max, unit string) string {
 // flattened into lines of text.
 func (r *renderer) cell(desc string, notes []string) docx.Cell {
 	var c docx.Cell
-	for _, b := range markdown(r.doc, desc) {
+	for _, b := range r.markdown(desc) {
 		if b.para != nil {
 			c = append(c, *b.para)
 			continue

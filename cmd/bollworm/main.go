@@ -218,7 +218,7 @@ func (j job) run(stdin io.Reader, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	out, err := render.Render(s, j.paper)
+	out, _, err := render.Render(s, render.Options{Paper: j.paper})
 	if err != nil {
 		return err
 	}

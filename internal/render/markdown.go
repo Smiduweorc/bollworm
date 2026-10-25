@@ -1,7 +1,9 @@
 package render
 
 import (
+	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/Smiduweorc/bollworm/internal/docx"
@@ -24,20 +26,21 @@ type block struct {
 }
 
 type mdConv struct {
-	doc *docx.Doc
-	src []byte
-	out []block
+	doc   *docx.Doc
+	links *linker
+	src   []byte
+	out   []block
 	// depth is how many lists enclose the node being converted.
 	depth int
 }
 
 // markdown converts a description into blocks. Lists are registered with
 // doc so their numbering is in place when the blocks are written.
-func markdown(doc *docx.Doc, src string) []block {
+func markdown(doc *docx.Doc, links *linker, src string) []block {
 	if strings.TrimSpace(src) == "" {
 		return nil
 	}
-	c := &mdConv{doc: doc, src: []byte(src)}
+	c := &mdConv{doc: doc, links: links, src: []byte(src)}
 	root := md.Parser().Parse(text.NewReader(c.src))
 	c.blocks(root, "")
 	return c.out
@@ -224,9 +227,11 @@ func (c *mdConv) inlines(n ast.Node, f docx.Inline) []docx.Inline {
 }
 
 // link makes label a hyperlink when url is one a reader can follow from a
-// document. A relative URL means nothing outside the site the spec was
-// written for, so it is printed after the label instead.
+// document. A relative URL is resolved against the base when there is one;
+// without one it means nothing outside the site the spec was written for,
+// so it is printed after the label instead.
 func (c *mdConv) link(url string, label []docx.Inline, f docx.Inline) []docx.Inline {
+	url = c.links.resolve(url)
 	if !followable(url) {
 		if url == "" || plain(label) == url {
 			return label
@@ -242,6 +247,37 @@ func (c *mdConv) link(url string, label []docx.Inline, f docx.Inline) []docx.Inl
 		label[i].URL = url
 	}
 	return label
+}
+
+// linker resolves relative links against the base the user gave, and
+// remembers the ones it could not, so the user can be told. There is no
+// guessed base: the API's server is often not where its documentation
+// lives, and a link to the wrong host looks exactly like a right one.
+type linker struct {
+	base       *url.URL
+	unresolved []string
+}
+
+// resolve makes a relative link absolute against the base. A fragment-only
+// link points into a page the manual is not, so it is left alone.
+func (l *linker) resolve(link string) string {
+	if link == "" || strings.HasPrefix(link, "#") || followable(link) {
+		return link
+	}
+	u, err := url.Parse(link)
+	if err != nil || u.Scheme != "" {
+		return link
+	}
+	if l == nil {
+		return link
+	}
+	if l.base == nil {
+		if !slices.Contains(l.unresolved, link) {
+			l.unresolved = append(l.unresolved, link)
+		}
+		return link
+	}
+	return l.base.ResolveReference(u).String()
 }
 
 func followable(url string) bool {

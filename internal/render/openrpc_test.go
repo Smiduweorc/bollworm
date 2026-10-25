@@ -84,3 +84,29 @@ func TestOpenRPCLinksResolve(t *testing.T) {
 	}
 	linksResolve(t, "openrpc-petstore", document(t, string(src)))
 }
+
+func TestOpenRPCMethodExtras(t *testing.T) {
+	text := visible(document(t, `openrpc: 1.3.2
+info: {title: T, version: '1'}
+methods:
+  - name: get
+    externalDocs: {url: 'https://docs.example.com/get'}
+    servers: [{url: 'https://edge.example.com', description: Edge}]
+    params: [{name: id, schema: {type: integer}}]
+    result: {name: thing, schema: {type: object}}
+    errors:
+      - {code: 4, message: Busy, data: {retryIn: 5}}
+      - {code: 5, message: Gone}
+    examples:
+      - name: remote
+        params: [{name: id, externalValue: 'https://ex.example.com/id.json'}]
+        result: {name: thing, externalValue: 'https://ex.example.com/thing.json'}
+`))
+	mustContain(t, text,
+		"See also: https://docs.example.com/get.\n",
+		"Servers: this method is called at the following URLs, not at the document's servers.\nURL | Description | \nhttps://edge.example.com | Edge | \n",
+		"Code | Message | Data | \n4 | Busy | {\"retryIn\":5} | \n5 | Gone |  | \n",
+		"The value of id is published at https://ex.example.com/id.json.\n",
+		"The result is published at https://ex.example.com/thing.json.\n",
+	)
+}

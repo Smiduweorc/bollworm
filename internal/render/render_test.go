@@ -24,7 +24,7 @@ func document(t testing.TB, src string) string {
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
-	data, err := Render(s, docx.A4)
+	data, _, err := Render(s, Options{Paper: docx.A4})
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}
@@ -151,9 +151,9 @@ func linksResolve(t *testing.T, name, doc string) {
 func TestOutputIsDeterministic(t *testing.T) {
 	src, _ := os.ReadFile("../../testdata/features.yaml")
 	s, _ := spec.Parse(src, "", nil)
-	a, _ := Render(s, docx.A4)
+	a, _, _ := Render(s, Options{Paper: docx.A4})
 	s, _ = spec.Parse(src, "", nil)
-	b, _ := Render(s, docx.A4)
+	b, _, _ := Render(s, Options{Paper: docx.A4})
 	if !bytes.Equal(a, b) {
 		t.Error("the same spec rendered twice gave different bytes")
 	}
@@ -584,16 +584,24 @@ func TestStatusText(t *testing.T) {
 func TestAnchor(t *testing.T) {
 	used := map[string]bool{}
 	long := strings.Repeat("x", 50)
+	// A want ending in "_" is a prefix: the hash after it is not spelled out.
 	cases := []struct{ name, want string }{
 		{"Pet", "Model_Pet"},
 		{"Pet", "Model_Pet_2"},
 		{"a.b-c d", "Model_a_b_c_d"},
-		{long, "Model_" + strings.Repeat("x", 34)},
-		{long, "Model_" + strings.Repeat("x", 32) + "_2"},
+		{long, "Model_" + strings.Repeat("x", 25) + "_8ff0d72d"},
+		{long, "Model_" + strings.Repeat("x", 25) + "_8ff0d7_2"},
+		// Two long names that start alike get different bookmarks.
+		{long + "y", "Model_" + strings.Repeat("x", 25) + "_"},
 		{"\u00e9", "Model__"},
 	}
 	for _, c := range cases {
-		if got := anchor("Model_", c.name, used); got != c.want {
+		got := anchor("Model_", c.name, used)
+		ok := got == c.want
+		if strings.HasSuffix(c.want, "_") {
+			ok = strings.HasPrefix(got, c.want) && !strings.Contains(got, "8ff0d7")
+		}
+		if len(got) > 40 || !ok {
 			t.Errorf("anchor(%q) = %q, want %q", c.name, got, c.want)
 		}
 	}
@@ -617,7 +625,7 @@ func FuzzRender(f *testing.F) {
 		if err != nil {
 			return
 		}
-		data, err := Render(s, docx.Letter)
+		data, _, err := Render(s, Options{Paper: docx.Letter})
 		if err != nil {
 			t.Fatalf("Render: %v", err)
 		}
