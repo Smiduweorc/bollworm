@@ -207,7 +207,7 @@ func (j job) run(stdin io.Reader, stdout io.Writer) error {
 	case source:
 		s, err = j.compile(input, src)
 	case set:
-		s, err = proto.Parse(src)
+		s, err = proto.Parse(src, false)
 	default:
 		s, err = spec.Parse(src, location, j.open.open)
 	}
@@ -269,7 +269,7 @@ func (j job) compile(input string, src []byte) (*spec.Spec, error) {
 	if err != nil {
 		return nil, err
 	}
-	return proto.Parse(set)
+	return proto.Parse(set, false)
 }
 
 // isTerminal asks the terminal driver rather than checking for a character

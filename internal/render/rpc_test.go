@@ -17,7 +17,7 @@ func protoSpec(t *testing.T, name, src string, importPaths ...string) *spec.Spec
 	if err != nil {
 		t.Fatalf("Compile: %v", err)
 	}
-	s, err := proto.Parse(set)
+	s, err := proto.Parse(set, false)
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
