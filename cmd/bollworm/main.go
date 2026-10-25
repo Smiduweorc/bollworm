@@ -1,4 +1,5 @@
-// Command bollworm turns an OpenAPI document into a Word reference manual.
+// Command bollworm turns an OpenAPI or OpenRPC document, or a protobuf API,
+// into a Word reference manual.
 package main
 
 import (
@@ -7,12 +8,15 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/Smiduweorc/bollworm/internal/docx"
+	"github.com/Smiduweorc/bollworm/internal/proto"
 	"github.com/Smiduweorc/bollworm/internal/render"
 	"github.com/Smiduweorc/bollworm/internal/spec"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
+	"google.golang.org/protobuf/reflect/protoregistry"
 )
 
 // version is set at build time with -ldflags "-X main.version=...".
@@ -35,6 +39,9 @@ type failure struct{ error }
 
 func (f failure) Unwrap() error { return f.error }
 
+// usage is a command line that only turns out wrong once the input is read.
+type usage struct{ error }
+
 func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	root := rootCmd(stdin)
 	root.SetArgs(args)
@@ -56,7 +63,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 func rootCmd(stdin io.Reader) *cobra.Command {
 	root := &cobra.Command{
 		Use:           "bollworm",
-		Short:         "Turn an OpenAPI document into a Word reference manual",
+		Short:         "Turn an OpenAPI or OpenRPC document, or a protobuf API, into a Word reference manual",
 		Version:       version,
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -67,30 +74,41 @@ func rootCmd(stdin io.Reader) *cobra.Command {
 
 func renderCmd(stdin io.Reader) *cobra.Command {
 	var (
-		output string
-		force  bool
-		remote bool
-		paper  string
+		output     string
+		force      bool
+		remote     bool
+		paper      string
+		protoPaths []string
 	)
 	cmd := &cobra.Command{
 		Use:   "render <spec> -o <file.docx>",
-		Short: "Write a .docx manual for an OpenAPI 3.0, 3.1 or 3.2 document",
-		Long: `Write a .docx manual for an OpenAPI 3.0, 3.1 or 3.2 document.
+		Short: "Write a .docx manual for an OpenAPI 3.x or OpenRPC 1.x document or a protobuf API",
+		Long: `Write a .docx manual for an OpenAPI 3.0, 3.1 or 3.2 document, an OpenRPC 1.x
+document, or the gRPC services in a .proto file or a FileDescriptorSet.
 
-The spec is YAML or JSON, read from a file or from stdin when given as "-".
-A $ref to another file is followed, relative to the file it is in (or to
-the working directory for stdin). A $ref to an https URL is fetched only
-with --allow-remote-refs; plain http is never fetched.
+The spec is read from a file or from stdin when given as "-". An OpenAPI
+or OpenRPC spec is YAML or JSON. A $ref to another file is followed, relative to the
+file it is in (or to the working directory for stdin). A $ref to an https
+URL is fetched only with --allow-remote-refs; plain http is never fetched.
+
+A .proto file is compiled with its imports, which are looked up in each
+--proto-path in turn, or in the file's own directory when none is given.
+google/protobuf/*.proto are built in. A FileDescriptorSet (.binpb, .pb,
+.desc or .protoset, from buf build or protoc --descriptor_set_out) is read
+as it is; build it with --include_source_info to keep the comments.
 
 The manual has a title page, a table of contents, the introduction and
-servers, authentication, one chapter per tag with a section per endpoint,
-and a chapter of data models. Word fills in the contents' page numbers when
-it opens the file and asks first.
+servers, authentication, one chapter per tag (or service) with a section
+per endpoint (or method, or rpc), and a chapter of data models. Word fills in the
+contents' page numbers when it opens the file and asks first.
 
 An existing output file is never replaced unless --force is given.`,
 		Example: `  bollworm render openapi.yaml -o api.docx
   curl -sSfL https://aur.archlinux.org/rpc/openapi.json | bollworm render - -o aur.docx
-  bollworm render openapi.json -o - --paper letter > api.docx`,
+  bollworm render openapi.json -o - --paper letter > api.docx
+  bollworm render openrpc.json -o api.docx
+  bollworm render proto/library/v1/library.proto --proto-path proto -o library.docx
+  buf build -o api.binpb && bollworm render api.binpb -o api.docx`,
 		Args: cobra.ExactArgs(1),
 		PreRunE: func(*cobra.Command, []string) error {
 			if paper != "a4" && paper != "letter" {
@@ -103,8 +121,13 @@ An existing output file is never replaced unless --force is given.`,
 			if paper == "letter" {
 				size = docx.Letter
 			}
-			j := job{input: args[0], output: output, force: force, paper: size, open: newOpener(remote)}
-			if err := j.run(stdin, cmd.OutOrStdout()); err != nil {
+			j := job{input: args[0], output: output, force: force, paper: size, open: newOpener(remote), protoPaths: protoPaths}
+			err := j.run(stdin, cmd.OutOrStdout())
+			var u usage
+			if errors.As(err, &u) {
+				return u.error
+			}
+			if err != nil {
 				return failure{err}
 			}
 			return nil
@@ -115,8 +138,10 @@ An existing output file is never replaced unless --force is given.`,
 	f.BoolVar(&force, "force", false, "replace the output file if it exists")
 	f.BoolVar(&remote, "allow-remote-refs", false, "fetch $refs to https URLs (files are always read)")
 	f.StringVar(&paper, "paper", "a4", "page size: a4 or letter")
+	f.StringArrayVarP(&protoPaths, "proto-path", "I", nil, "directory to look for .proto imports in; repeatable, searched in order")
 	_ = cmd.MarkFlagRequired("output")
 	_ = cmd.MarkFlagFilename("output", "docx")
+	_ = cmd.MarkFlagDirname("proto-path")
 	_ = cmd.RegisterFlagCompletionFunc("paper", cobra.FixedCompletions([]string{"a4", "letter"}, cobra.ShellCompDirectiveNoFileComp))
 	return cmd
 }
@@ -127,6 +152,7 @@ type job struct {
 	force         bool
 	paper         docx.Paper
 	open          *opener
+	protoPaths    []string
 }
 
 func (j job) run(stdin io.Reader, stdout io.Writer) error {
@@ -163,9 +189,34 @@ func (j job) run(stdin io.Reader, stdout io.Writer) error {
 	if location, err = filepath.Abs(location); err != nil {
 		return err
 	}
-	s, err := spec.Parse(src, location, j.open.open)
-	if err != nil {
+
+	set, source := proto.Detect(src)
+	switch strings.ToLower(filepath.Ext(input)) {
+	case ".proto":
+		set, source = false, true
+	case ".binpb", ".pb", ".desc", ".protoset":
+		set, source = true, false
+	case ".yaml", ".yml", ".json":
+		set, source = false, false
+	}
+	if len(j.protoPaths) > 0 && !source {
+		return usage{fmt.Errorf("--proto-path is for .proto input, and %s is not a .proto file", name)}
+	}
+	var s *spec.Spec
+	switch {
+	case source:
+		s, err = j.compile(input, src)
+	case set:
+		s, err = proto.Parse(src)
+	default:
+		s, err = spec.Parse(src, location, j.open.open)
+	}
+	// A compile error already starts with file:line:col.
+	if err != nil && !source {
 		return fmt.Errorf("%s: %w", name, err)
+	}
+	if err != nil {
+		return err
 	}
 	out, err := render.Render(s, j.paper)
 	if err != nil {
@@ -176,6 +227,49 @@ func (j job) run(stdin io.Reader, stdout io.Writer) error {
 		return err
 	}
 	return writeFile(output, out, j.force)
+}
+
+// compile builds a .proto file the way protoc does: its name is its path
+// under the import path that holds it, which is how other files import it
+// and how errors name it.
+func (j job) compile(input string, src []byte) (*spec.Spec, error) {
+	paths := j.protoPaths
+	var name string
+	switch {
+	case input == "-":
+		name = "stdin"
+		if len(paths) == 0 {
+			paths = []string{"."}
+		}
+	case len(paths) == 0:
+		name, paths = filepath.Base(input), []string{filepath.Dir(input)}
+	default:
+		abs, err := filepath.Abs(input)
+		if err != nil {
+			return nil, err
+		}
+		for _, p := range paths {
+			dir, err := filepath.Abs(p)
+			if err != nil {
+				return nil, err
+			}
+			if rel, err := filepath.Rel(dir, abs); err == nil && filepath.IsLocal(rel) {
+				name = filepath.ToSlash(rel)
+				break
+			}
+		}
+		if name == "" {
+			return nil, fmt.Errorf("%s is not under any --proto-path; add the directory its imports are relative to", input)
+		}
+	}
+	set, err := proto.Compile(name, src, paths)
+	if errors.Is(err, protoregistry.NotFound) {
+		return nil, fmt.Errorf("%w (looked in %s; add the directory that holds it with --proto-path)", err, strings.Join(paths, ", "))
+	}
+	if err != nil {
+		return nil, err
+	}
+	return proto.Parse(set)
 }
 
 // isTerminal asks the terminal driver rather than checking for a character
