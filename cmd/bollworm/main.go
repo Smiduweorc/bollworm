@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -51,7 +52,10 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if err == nil {
 		return 0
 	}
-	fmt.Fprintf(stderr, "bollworm: %v\n", err)
+	// A document with several problems reports each on a line of its own.
+	for _, line := range strings.Split(err.Error(), "\n") {
+		fmt.Fprintf(stderr, "bollworm: %s\n", line)
+	}
 	var f failure
 	if errors.As(err, &f) {
 		return exitFailure
@@ -79,6 +83,11 @@ func renderCmd(stdin io.Reader) *cobra.Command {
 		remote     bool
 		paper      string
 		protoPaths []string
+		linkBase   string
+		imports    bool
+		strict     bool
+		tocDepth   int
+		reference  string
 	)
 	cmd := &cobra.Command{
 		Use:   "render <spec> -o <file.docx>",
@@ -102,17 +111,35 @@ servers, authentication, one chapter per tag (or service) with a section
 per endpoint (or method, or rpc), and a chapter of data models. Word fills in the
 contents' page numbers when it opens the file and asks first.
 
+Relative links in descriptions are resolved against --link-base. Without
+it, a relative link is printed after its text, with a warning.
+
+Anything in the spec the manual cannot show as written is reported on
+stderr as a warning, and the manual is still written; with --strict a
+warning fails the run instead. Every error found is reported, not only the
+first.
+
 An existing output file is never replaced unless --force is given.`,
 		Example: `  bollworm render openapi.yaml -o api.docx
   curl -sSfL https://aur.archlinux.org/rpc/openapi.json | bollworm render - -o aur.docx
   bollworm render openapi.json -o - --paper letter > api.docx
   bollworm render openrpc.json -o api.docx
+  bollworm render openapi.yaml -o api.docx --reference-doc house-style.docx
   bollworm render proto/library/v1/library.proto --proto-path proto -o library.docx
   buf build -o api.binpb && bollworm render api.binpb -o api.docx`,
 		Args: cobra.ExactArgs(1),
 		PreRunE: func(*cobra.Command, []string) error {
 			if paper != "a4" && paper != "letter" {
 				return fmt.Errorf("invalid --paper %q (want a4 or letter)", paper)
+			}
+			if tocDepth < 1 || tocDepth > 3 {
+				return fmt.Errorf("invalid --toc-depth %d (want 1, 2 or 3)", tocDepth)
+			}
+			if linkBase != "" {
+				u, err := url.Parse(linkBase)
+				if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
+					return fmt.Errorf("invalid --link-base %q (want an absolute http or https URL)", linkBase)
+				}
 			}
 			return nil
 		},
@@ -121,8 +148,12 @@ An existing output file is never replaced unless --force is given.`,
 			if paper == "letter" {
 				size = docx.Letter
 			}
-			j := job{input: args[0], output: output, force: force, paper: size, open: newOpener(remote), protoPaths: protoPaths}
-			err := j.run(stdin, cmd.OutOrStdout())
+			j := job{input: args[0], output: output, force: force, open: newOpener(remote), protoPaths: protoPaths, imports: imports, strict: strict, reference: reference}
+			j.render.Paper, j.render.TOCDepth = size, tocDepth
+			if linkBase != "" {
+				j.render.LinkBase, _ = url.Parse(linkBase)
+			}
+			err := j.run(stdin, cmd.OutOrStdout(), cmd.ErrOrStderr())
 			var u usage
 			if errors.As(err, &u) {
 				return u.error
@@ -139,10 +170,18 @@ An existing output file is never replaced unless --force is given.`,
 	f.BoolVar(&remote, "allow-remote-refs", false, "fetch $refs to https URLs (files are always read)")
 	f.StringVar(&paper, "paper", "a4", "page size: a4 or letter")
 	f.StringArrayVarP(&protoPaths, "proto-path", "I", nil, "directory to look for .proto imports in; repeatable, searched in order")
+	f.BoolVar(&imports, "include-imports", false, "protobuf: also describe the services of imported files (not google.protobuf or google.api)")
+	f.StringVar(&linkBase, "link-base", "", "absolute URL to resolve relative links in descriptions against")
+	f.BoolVar(&strict, "strict", false, "fail, writing nothing, when there are warnings")
+	f.StringVar(&reference, "reference-doc", "", "take the document's styles from this .docx; styles it lacks keep bollworm's")
+	f.IntVar(&tocDepth, "toc-depth", 2, "heading levels in the contents: 1 chapters, 2 endpoints, 3 their parts")
 	_ = cmd.MarkFlagRequired("output")
 	_ = cmd.MarkFlagFilename("output", "docx")
 	_ = cmd.MarkFlagDirname("proto-path")
+	_ = cmd.MarkFlagFilename("reference-doc", "docx")
 	_ = cmd.RegisterFlagCompletionFunc("paper", cobra.FixedCompletions([]string{"a4", "letter"}, cobra.ShellCompDirectiveNoFileComp))
+	_ = cmd.RegisterFlagCompletionFunc("toc-depth", cobra.FixedCompletions([]string{"1", "2", "3"}, cobra.ShellCompDirectiveNoFileComp))
+	_ = cmd.RegisterFlagCompletionFunc("link-base", cobra.NoFileCompletions)
 	return cmd
 }
 
@@ -150,12 +189,15 @@ An existing output file is never replaced unless --force is given.`,
 type job struct {
 	input, output string
 	force         bool
-	paper         docx.Paper
+	render        render.Options
 	open          *opener
 	protoPaths    []string
+	imports       bool
+	strict        bool
+	reference     string
 }
 
-func (j job) run(stdin io.Reader, stdout io.Writer) error {
+func (j job) run(stdin io.Reader, stdout, stderr io.Writer) error {
 	input, output := j.input, j.output
 	if output == "-" {
 		if f, ok := stdout.(*os.File); ok && isTerminal(f) {
@@ -202,31 +244,82 @@ func (j job) run(stdin io.Reader, stdout io.Writer) error {
 	if len(j.protoPaths) > 0 && !source {
 		return usage{fmt.Errorf("--proto-path is for .proto input, and %s is not a .proto file", name)}
 	}
+	if j.imports && !source && !set {
+		return usage{fmt.Errorf("--include-imports is for protobuf input, and %s is not a .proto file or a FileDescriptorSet", name)}
+	}
 	var s *spec.Spec
 	switch {
 	case source:
 		s, err = j.compile(input, src)
 	case set:
-		s, err = proto.Parse(src)
+		s, err = proto.Parse(src, j.imports)
 	default:
 		s, err = spec.Parse(src, location, j.open.open)
 	}
 	// A compile error already starts with file:line:col.
 	if err != nil && !source {
-		return fmt.Errorf("%s: %w", name, err)
+		return prefixed(name, err)
 	}
 	if err != nil {
 		return err
 	}
-	out, err := render.Render(s, j.paper)
+	var styled []string
+	if j.reference != "" {
+		data, err := os.ReadFile(j.reference)
+		if err != nil {
+			return err
+		}
+		var missing []string
+		if j.render.Styles, missing, err = docx.Reference(data); err != nil {
+			return fmt.Errorf("%s: %w", j.reference, err)
+		}
+		for _, id := range missing {
+			styled = append(styled, fmt.Sprintf("%s: it has no %q style, so bollworm's is used", j.reference, id))
+		}
+	}
+	out, rendered, err := render.Render(s, j.render)
 	if err != nil {
 		return err
+	}
+	// A protobuf warning already starts with the file it is in.
+	for _, w := range s.Warnings {
+		if source || set {
+			fmt.Fprintf(stderr, "bollworm: warning: %s\n", w)
+		} else {
+			fmt.Fprintf(stderr, "bollworm: warning: %s: %s\n", name, w)
+		}
+	}
+	for _, w := range rendered {
+		fmt.Fprintf(stderr, "bollworm: warning: %s: %s\n", name, w)
+	}
+	for _, w := range styled {
+		fmt.Fprintf(stderr, "bollworm: warning: %s\n", w)
+	}
+	if n := len(s.Warnings) + len(rendered) + len(styled); j.strict && n > 0 {
+		noun := "warnings"
+		if n == 1 {
+			noun = "warning"
+		}
+		return fmt.Errorf("%s: %d %s, and --strict is set; nothing was written", name, n, noun)
 	}
 	if output == "-" {
 		_, err := stdout.Write(out)
 		return err
 	}
 	return writeFile(output, out, j.force)
+}
+
+// prefixed puts the input's name before each of err's refusals.
+func prefixed(name string, err error) error {
+	var errs spec.Errors
+	if !errors.As(err, &errs) || len(errs) < 2 {
+		return fmt.Errorf("%s: %w", name, err)
+	}
+	out := make([]error, len(errs))
+	for i, e := range errs {
+		out[i] = fmt.Errorf("%s: %w", name, e)
+	}
+	return errors.Join(out...)
 }
 
 // compile builds a .proto file the way protoc does: its name is its path
@@ -269,7 +362,7 @@ func (j job) compile(input string, src []byte) (*spec.Spec, error) {
 	if err != nil {
 		return nil, err
 	}
-	return proto.Parse(set)
+	return proto.Parse(set, j.imports)
 }
 
 // isTerminal asks the terminal driver rather than checking for a character

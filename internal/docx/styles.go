@@ -38,6 +38,8 @@ var styles = xmlHeader + `<w:styles ` + nsW + `>` +
 	`<w:pPr><w:spacing w:after="100"/></w:pPr></w:style>` +
 	`<w:style w:type="paragraph" w:styleId="TOC2"><w:name w:val="toc 2"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:uiPriority w:val="39"/><w:unhideWhenUsed/>` +
 	`<w:pPr><w:spacing w:after="100"/><w:ind w:left="220"/></w:pPr></w:style>` +
+	`<w:style w:type="paragraph" w:styleId="TOC3"><w:name w:val="toc 3"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:uiPriority w:val="39"/><w:unhideWhenUsed/>` +
+	`<w:pPr><w:spacing w:after="100"/><w:ind w:left="440"/></w:pPr></w:style>` +
 
 	`<w:style w:type="paragraph" w:styleId="ListParagraph"><w:name w:val="List Paragraph"/><w:basedOn w:val="Normal"/><w:uiPriority w:val="34"/><w:qFormat/>` +
 	`<w:pPr><w:ind w:left="720"/><w:contextualSpacing/></w:pPr></w:style>` +
@@ -101,7 +103,7 @@ const settings = xmlHeader + `<w:settings ` + nsW + `>` +
 	`<w:defaultTabStop w:val="720"/>` +
 	`<w:characterSpacingControl w:val="doNotCompress"/>` +
 	// Fills in the table of contents' page numbers when the file is opened.
-	// Word asks before it does this; see the README's known quirks.
+	// Word asks before it does this; see docs/quirks.md.
 	`<w:updateFields w:val="true"/>` +
 	// Mode 15 is Word 2013 and later. Without it Word opens the file in
 	// Compatibility Mode, which is the first thing a reader notices.
@@ -111,3 +113,10 @@ const settings = xmlHeader + `<w:settings ` + nsW + `>` +
 	`<w:compatSetting w:name="doNotFlipMirrorIndents" w:uri="http://schemas.microsoft.com/office/word" w:val="1"/>` +
 	`</w:compat>` +
 	`</w:settings>`
+
+// Describes Aptos as a sans-serif family. Where Aptos is missing LibreOffice
+// falls back to a serif font without this; with it, to a sans one.
+const fontTable = xmlHeader + `<w:fonts ` + nsW + `>` +
+	`<w:font w:name="Aptos"><w:panose1 w:val="020B0004020202020204"/><w:charset w:val="00"/><w:family w:val="swiss"/><w:pitch w:val="variable"/></w:font>` +
+	`<w:font w:name="Aptos Display"><w:panose1 w:val="020B0004020202020204"/><w:charset w:val="00"/><w:family w:val="swiss"/><w:pitch w:val="variable"/></w:font>` +
+	`</w:fonts>`

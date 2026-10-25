@@ -6,7 +6,9 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -132,5 +134,123 @@ func TestRemoteRefsNeedTheFlag(t *testing.T) {
 	r = cli(t, strings.Replace(src, "https:", "http:", 1), "render", "-", "-o", "-", "--allow-remote-refs")
 	if r.code != exitFailure || !strings.Contains(r.stderr, "plain http is not fetched; only https") {
 		t.Errorf("http: %+v", r)
+	}
+}
+
+func TestFetchRetriesPassingFailures(t *testing.T) {
+	var calls map[string]int
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls[r.URL.Path]++
+		n := calls[r.URL.Path]
+		switch r.URL.Path {
+		case "/flaky":
+			if n < fetchAttempts {
+				w.Header().Set("Retry-After", "120")
+				http.Error(w, "busy", http.StatusServiceUnavailable)
+				return
+			}
+			_, _ = w.Write([]byte("ok"))
+		case "/limited":
+			http.Error(w, "slow down", http.StatusTooManyRequests)
+		case "/broken":
+			http.Error(w, "nope", http.StatusNotImplemented)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	o := tlsOpener(t, srv)
+	var waits []time.Duration
+	o.sleep = func(d time.Duration) { waits = append(waits, d) }
+	o.jitter = func() float64 { return 1 }
+
+	calls = map[string]int{}
+	if b, err := o.open(srv.URL + "/flaky"); err != nil || string(b) != "ok" {
+		t.Errorf("flaky: %q %v", b, err)
+	}
+	if calls["/flaky"] != fetchAttempts || len(waits) != fetchAttempts-1 || waits[0] != maxRetryWait {
+		t.Errorf("flaky: %d calls, waits %v", calls["/flaky"], waits)
+	}
+
+	_, err := o.open(srv.URL + "/limited")
+	if err == nil || !strings.Contains(err.Error(), "429") || !strings.Contains(err.Error(), "tried 3 times") || calls["/limited"] != fetchAttempts {
+		t.Errorf("limited: %v after %d calls", err, calls["/limited"])
+	}
+	for _, path := range []string{"/broken", "/missing"} {
+		if _, err := o.open(srv.URL + path); err == nil || strings.Contains(err.Error(), "tried") || calls[path] != 1 {
+			t.Errorf("%s is not retried: %v after %d calls", path, err, calls[path])
+		}
+	}
+}
+
+func TestRetryAfter(t *testing.T) {
+	now := time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)
+	cases := map[string]time.Duration{
+		"":                              0,
+		"3":                             3 * time.Second,
+		"999":                           maxRetryWait,
+		"0":                             time.Second,
+		"Sun, 25 Oct 2026 12:00:04 GMT": 4 * time.Second,
+		"Sun, 25 Oct 2026 13:00:00 GMT": maxRetryWait,
+		"Sun, 25 Oct 2026 11:00:00 GMT": time.Second,
+		"soon":                          0,
+	}
+	for h, want := range cases {
+		if got := retryAfter(h, now); got != want {
+			t.Errorf("retryAfter(%q) = %v, want %v", h, got, want)
+		}
+	}
+}
+
+func TestTimeoutIsNotRetried(t *testing.T) {
+	var calls atomic.Int32
+	release := make(chan struct{})
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+	}))
+	defer srv.Close()
+	defer close(release)
+	o := tlsOpener(t, srv)
+	o.client.Timeout = 50 * time.Millisecond
+	o.sleep = func(time.Duration) { t.Error("slept before retrying a timeout") }
+	if _, err := o.open(srv.URL + "/slow"); err == nil || calls.Load() != 1 {
+		t.Errorf("slow: %v after %d calls", err, calls.Load())
+	}
+}
+
+func TestBackoffDoublesAndIsJittered(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		http.Error(w, "down", http.StatusBadGateway)
+	}))
+	defer srv.Close()
+	for _, c := range []struct {
+		jitter float64
+		want   []time.Duration
+	}{
+		{1, []time.Duration{time.Second, 2 * time.Second}},
+		{0.5, []time.Duration{500 * time.Millisecond, time.Second}},
+		{1.49, []time.Duration{1490 * time.Millisecond, 2980 * time.Millisecond}},
+	} {
+		o := tlsOpener(t, srv)
+		var waits []time.Duration
+		o.sleep = func(d time.Duration) { waits = append(waits, d) }
+		o.jitter = func() float64 { return c.jitter }
+		if _, err := o.open(srv.URL + "/x"); err == nil {
+			t.Fatal("502 succeeded")
+		}
+		if !slices.Equal(waits, c.want) {
+			t.Errorf("jitter %v: waits %v, want %v", c.jitter, waits, c.want)
+		}
+	}
+	for range 1000 {
+		if j := newOpener(true).jitter(); j < 0.5 || j >= 1.5 {
+			t.Fatalf("jitter %v outside [0.5, 1.5)", j)
+		}
 	}
 }

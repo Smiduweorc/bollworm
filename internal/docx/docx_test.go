@@ -276,7 +276,7 @@ func TestPackageIsCompleteAndDeterministic(t *testing.T) {
 		t.Fatal("two builds of the same document differ")
 	}
 	parts := unpack(t, a)
-	for _, name := range []string{"[Content_Types].xml", "_rels/.rels", "docProps/core.xml", "docProps/app.xml", "word/document.xml", "word/_rels/document.xml.rels", "word/styles.xml", "word/settings.xml", "word/numbering.xml", "word/footer1.xml"} {
+	for _, name := range []string{"[Content_Types].xml", "_rels/.rels", "docProps/core.xml", "docProps/app.xml", "word/document.xml", "word/_rels/document.xml.rels", "word/styles.xml", "word/settings.xml", "word/numbering.xml", "word/footer1.xml", "word/fontTable.xml"} {
 		if _, ok := parts[name]; !ok {
 			t.Errorf("missing part %s", name)
 		}
@@ -365,5 +365,15 @@ func TestEveryReferencedStyleIsDefined(t *testing.T) {
 		if !strings.Contains(styles, `w:styleId="`+u[1]+`"`) {
 			t.Errorf("style %s is used but not defined", u[1])
 		}
+	}
+}
+
+func TestBuiltinStyleIDsAreUnique(t *testing.T) {
+	seen := map[string]bool{}
+	for _, m := range builtinStyle.FindAllStringSubmatch(styles, -1) {
+		if seen[m[1]] {
+			t.Errorf("style %s is defined twice", m[1])
+		}
+		seen[m[1]] = true
 	}
 }

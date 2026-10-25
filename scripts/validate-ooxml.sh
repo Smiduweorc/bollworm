@@ -55,7 +55,7 @@ go build -o "$out/bollworm" "$root/cmd/bollworm"
 failed=0
 # strava.json is left out: its $refs are fetched from developers.strava.com,
 # and this check must not depend on someone else's server.
-for spec in "$root"/testdata/aur.json "$root"/testdata/petstore3.json "$root"/testdata/features.yaml \
+for spec in "$root"/testdata/aur.json "$root"/testdata/petstore3.json "$root"/testdata/features.yaml "$root"/testdata/extras.yaml \
 	"$root"/testdata/openrpc-petstore.json "$root"/testdata/openrpc-features.yaml \
 	"$root"/testdata/proto/library/v1/library.proto "$root"/testdata/proto/haberdasher/v1/haberdasher.proto; do
 	name=$(basename "$spec")

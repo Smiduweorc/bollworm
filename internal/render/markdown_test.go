@@ -13,7 +13,7 @@ import (
 
 func convert(t *testing.T, src string) []block {
 	t.Helper()
-	return markdown(docx.New("t", docx.A4), src)
+	return markdown(docx.New("t", docx.A4), nil, src)
 }
 
 func one(t *testing.T, src string) docx.Para {
@@ -144,7 +144,7 @@ func TestCodeBlocks(t *testing.T) {
 
 func TestLists(t *testing.T) {
 	doc := docx.New("t", docx.A4)
-	bs := markdown(doc, "- a\n- b\n  1. b1\n  2. b2\n\n     b2 more\n- c\n\n3. three\n4. four\n")
+	bs := markdown(doc, nil, "- a\n- b\n  1. b1\n  2. b2\n\n     b2 more\n- c\n\n3. three\n4. four\n")
 	type row struct {
 		text  string
 		style string

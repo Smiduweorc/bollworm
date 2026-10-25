@@ -13,6 +13,7 @@ package docx
 import (
 	"archive/zip"
 	"bytes"
+	"cmp"
 	"encoding/xml"
 	"fmt"
 	"strconv"
@@ -77,16 +78,21 @@ type Table struct {
 
 // Doc accumulates the body of a document.
 type Doc struct {
-	Title  string
-	Paper  Paper
-	body   bytes.Buffer
-	links  []string
-	linkID map[string]string
-	lists  []listDef
-	marks  int
-	toc    []tocEntry
-	tocAt  int
-	hasTOC bool
+	Title string
+	Paper Paper
+	// Styles replaces the built-in styles part when it is not empty; see
+	// Reference.
+	Styles string
+	// TOCDepth is the deepest heading level the contents list, 1 to 3.
+	TOCDepth int
+	body     bytes.Buffer
+	links    []string
+	linkID   map[string]string
+	lists    []listDef
+	marks    int
+	toc      []tocEntry
+	tocAt    int
+	hasTOC   bool
 }
 
 type listDef struct {
@@ -95,7 +101,7 @@ type listDef struct {
 }
 
 func New(title string, paper Paper) *Doc {
-	return &Doc{Title: title, Paper: paper, linkID: map[string]string{}}
+	return &Doc{Title: title, Paper: paper, TOCDepth: 2, linkID: map[string]string{}}
 }
 
 // TextWidth is the width between the margins, in twentieths of a point.
@@ -185,14 +191,15 @@ func (d *Doc) Table(t Table) {
 	writePara(b, d, Para{Style: "AfterTable"})
 }
 
-// Heading writes a heading. Levels 1 and 2 are listed in the table of
-// contents. anchor names the bookmark other parts of the document link to;
-// pass "" when nothing links here and one is made up for the contents.
+// Heading writes a heading. Levels down to TOCDepth are listed in the
+// table of contents. anchor names the bookmark other parts of the document
+// link to; pass "" when nothing links here and one is made up for the
+// contents.
 func (d *Doc) Heading(level int, text, anchor string) {
 	if anchor == "" {
 		anchor = d.Bookmark()
 	}
-	if level <= 2 {
+	if level <= d.TOCDepth {
 		d.toc = append(d.toc, tocEntry{level, text, anchor})
 	}
 	d.Para(Para{Style: "Heading" + strconv.Itoa(level), Inlines: []Inline{{Text: text}}, Bookmark: anchor})
@@ -211,13 +218,13 @@ func (d *Doc) TOC() {
 	d.hasTOC = true
 }
 
-// tocXML is a TOC field over heading levels 1 and 2. Word fills in page
+// tocXML is a TOC field over heading levels 1 to TOCDepth. Word fills in page
 // numbers when it updates fields on open; until then the entries show
 // without them, so a viewer that never updates fields still gets a working
 // list of links.
 func (d *Doc) tocXML() string {
 	var b bytes.Buffer
-	begin := `<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> TOC \o "1-2" \h \z \u </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r>`
+	begin := `<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> TOC \o "1-` + strconv.Itoa(d.TOCDepth) + `" \h \z \u </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r>`
 	end := `<w:r><w:fldChar w:fldCharType="end"/></w:r>`
 	if len(d.toc) == 0 {
 		b.WriteString(`<w:p><w:pPr><w:pStyle w:val="TOC1"/></w:pPr>` + begin + end + `</w:p>`)
@@ -397,10 +404,11 @@ func (d *Doc) parts() []part {
 		{"docProps/app.xml", appProps},
 		{"word/document.xml", d.document()},
 		{"word/_rels/document.xml.rels", d.documentRels()},
-		{"word/styles.xml", styles},
+		{"word/styles.xml", cmp.Or(d.Styles, styles)},
 		{"word/settings.xml", settings},
 		{"word/numbering.xml", d.numbering()},
 		{"word/footer1.xml", d.footer()},
+		{"word/fontTable.xml", fontTable},
 	}
 }
 
@@ -411,6 +419,7 @@ const contentTypes = xmlHeader + `<Types xmlns="http://schemas.openxmlformats.or
 	`<Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>` +
 	`<Override PartName="/word/settings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/>` +
 	`<Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/>` +
+	`<Override PartName="/word/fontTable.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.fontTable+xml"/>` +
 	`<Override PartName="/word/footer1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/>` +
 	`<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>` +
 	`<Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>` +
@@ -436,6 +445,7 @@ func (d *Doc) documentRels() string {
 	b.WriteString(`<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings" Target="settings.xml"/>`)
 	b.WriteString(`<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering" Target="numbering.xml"/>`)
 	b.WriteString(`<Relationship Id="rId4" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="footer1.xml"/>`)
+	b.WriteString(`<Relationship Id="rId5" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/fontTable" Target="fontTable.xml"/>`)
 	for _, u := range d.links {
 		fmt.Fprintf(&b, `<Relationship Id="%s" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="%s" TargetMode="External"/>`, d.linkID[u], escAttr(u))
 	}

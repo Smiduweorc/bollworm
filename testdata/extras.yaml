@@ -1,0 +1,79 @@
+# Exercises the parts of OpenAPI that only some specs use: externalDocs,
+# parameter serialization, form encoding, response links, callbacks,
+# discriminators and XML names.
+openapi: 3.1.0
+info: {title: T, version: '1'}
+externalDocs: {url: 'https://docs.example.com', description: The guide}
+servers: [{url: 'https://api.example.com/v1'}]
+tags:
+  - name: Pets
+    externalDocs: {url: 'https://docs.example.com/pets'}
+paths:
+  /pets:
+    post:
+      tags: [Pets]
+      operationId: createPet
+      summary: Create a pet
+      description: See [the rules](/rules.html) and [above](#top).
+      externalDocs: {url: 'https://docs.example.com/create', description: Creating pets.}
+      parameters:
+        - {name: ids, in: query, style: pipeDelimited, explode: false, schema: {type: array, items: {type: string}}}
+        - name: filter
+          in: query
+          content: {application/json: {schema: {type: object}}}
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                photo: {type: string, format: binary}
+                meta: {type: object}
+            encoding:
+              photo:
+                contentType: image/png
+                headers:
+                  X-Rate: {description: Upload rate., schema: {type: integer}}
+              meta: {style: deepObject, explode: true}
+      responses:
+        "201":
+          description: Created
+          content: {application/json: {schema: {$ref: '#/components/schemas/Pet'}}}
+          links:
+            GetPet:
+              operationId: getPet
+              parameters: {id: $response.body#/id}
+              description: Fetch what was made.
+      callbacks:
+        onAdopted:
+          '{$request.body#/callbackUrl}':
+            post:
+              summary: Adopted
+              requestBody:
+                content: {application/json: {schema: {type: object, properties: {at: {type: string}}}}}
+              responses:
+                "204": {description: Received}
+  /pets/{id}:
+    get:
+      tags: [Pets]
+      operationId: getPet
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      responses:
+        "200": {description: The pet}
+components:
+  schemas:
+    Pet:
+      oneOf: [{$ref: '#/components/schemas/Cat'}, {$ref: '#/components/schemas/Dog'}]
+      discriminator:
+        propertyName: kind
+        mapping: {cat: '#/components/schemas/Cat', dog: Dog, bird: '#/components/schemas/Bird'}
+      xml: {name: pet, namespace: 'https://example.com/ns'}
+      externalDocs: {url: 'https://docs.example.com/pet'}
+    Cat:
+      type: object
+      properties:
+        kind: {type: string}
+        lives: {type: integer, xml: {attribute: true}}
+    Dog:
+      type: object
+      properties: {kind: {type: string}}

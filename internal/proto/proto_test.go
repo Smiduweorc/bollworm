@@ -38,7 +38,7 @@ func mustWrite(t testing.TB, path string, data []byte) {
 
 func parseSet(t *testing.T, set []byte) *spec.Spec {
 	t.Helper()
-	s, err := Parse(set)
+	s, err := Parse(set, false)
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
@@ -52,6 +52,25 @@ func library(t *testing.T) *spec.Spec {
 // source compiles a.proto, written with files into a fresh import path.
 func source(t *testing.T, files map[string]string) (*spec.Spec, error) {
 	t.Helper()
+	set, err := compileA(t, files)
+	if err != nil {
+		return nil, err
+	}
+	return Parse(set, false)
+}
+
+// compileSources is source's compile step, which must succeed.
+func compileSources(t *testing.T, files map[string]string) []byte {
+	t.Helper()
+	set, err := compileA(t, files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return set
+}
+
+func compileA(t *testing.T, files map[string]string) ([]byte, error) {
+	t.Helper()
 	dir := t.TempDir()
 	for name, src := range files {
 		if err := os.MkdirAll(filepath.Dir(filepath.Join(dir, name)), 0o755); err != nil {
@@ -59,11 +78,7 @@ func source(t *testing.T, files map[string]string) (*spec.Spec, error) {
 		}
 		mustWrite(t, filepath.Join(dir, name), []byte(src))
 	}
-	set, err := Compile("a.proto", []byte(files["a.proto"]), []string{dir})
-	if err != nil {
-		return nil, err
-	}
-	return Parse(set)
+	return Compile("a.proto", []byte(files["a.proto"]), []string{dir})
 }
 
 func model(t *testing.T, s *spec.Spec, name string) *spec.Schema {
@@ -329,7 +344,9 @@ func TestEnumValuesKeepNumbersAndComments(t *testing.T) {
 		{Name: "BIOGRAPHY", Number: 3, Description: "Merged into HISTORY.", Deprecated: true},
 		{Name: "POETRY", Number: 10},
 	}
-	if !slices.Equal(g.Values, want) || !slices.Equal(g.Types, []string{"enum"}) || g.Description != "The section of the library a shelf is in." {
+	if !slices.EqualFunc(g.Values, want, func(a, b spec.EnumValue) bool {
+		return a.Name == b.Name && a.Number == b.Number && a.Description == b.Description && a.Deprecated == b.Deprecated && len(a.Options) == 0
+	}) || !slices.Equal(g.Types, []string{"enum"}) || g.Description != "The section of the library a shelf is in." {
 		t.Errorf("%+v", g)
 	}
 }
@@ -468,12 +485,12 @@ func TestParseRefusesWhatIsNotADescriptorSet(t *testing.T) {
 		"openapi: 3.1.0\n": "not a FileDescriptorSet",
 	}
 	for data, want := range cases {
-		if _, err := Parse([]byte(data)); err == nil || !strings.Contains(err.Error(), want) {
+		if _, err := Parse([]byte(data), false); err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%q: %v, want %q", data, err, want)
 		}
 	}
 	twice, _ := proto.Marshal(&descriptorpb.FileDescriptorSet{File: []*descriptorpb.FileDescriptorProto{{Name: proto.String("a.proto")}, {Name: proto.String("a.proto")}}})
-	if _, err := Parse(twice); err == nil || !strings.Contains(err.Error(), `"a.proto"`) {
+	if _, err := Parse(twice, false); err == nil || !strings.Contains(err.Error(), `"a.proto"`) {
 		t.Errorf("a file twice: %v", err)
 	}
 }

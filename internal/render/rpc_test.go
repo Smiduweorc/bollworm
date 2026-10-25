@@ -17,7 +17,7 @@ func protoSpec(t *testing.T, name, src string, importPaths ...string) *spec.Spec
 	if err != nil {
 		t.Fatalf("Compile: %v", err)
 	}
-	s, err := proto.Parse(set)
+	s, err := proto.Parse(set, false)
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
@@ -26,7 +26,7 @@ func protoSpec(t *testing.T, name, src string, importPaths ...string) *spec.Spec
 
 func protoDocument(t *testing.T, s *spec.Spec) string {
 	t.Helper()
-	data, err := Render(s, docx.A4)
+	data, _, err := Render(s, Options{Paper: docx.A4})
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}
@@ -164,8 +164,8 @@ message A {
 
 func TestProtoOutputIsDeterministic(t *testing.T) {
 	src, _ := os.ReadFile("../../testdata/proto/library/v1/library.proto")
-	a, _ := Render(protoSpec(t, "library/v1/library.proto", string(src), "../../testdata/proto"), docx.A4)
-	b, _ := Render(protoSpec(t, "library/v1/library.proto", string(src), "../../testdata/proto"), docx.A4)
+	a, _, _ := Render(protoSpec(t, "library/v1/library.proto", string(src), "../../testdata/proto"), Options{Paper: docx.A4})
+	b, _, _ := Render(protoSpec(t, "library/v1/library.proto", string(src), "../../testdata/proto"), Options{Paper: docx.A4})
 	if !bytes.Equal(a, b) {
 		t.Error("the same .proto rendered twice gave different bytes")
 	}

@@ -48,18 +48,53 @@ func (r *reader) addDocument(loc string, src []byte) (*document, error) {
 	}
 	d.root = deref(doc.Content[0])
 	r.docs[loc] = d
-	var walk func(*yaml.Node)
-	walk = func(n *yaml.Node) {
-		if _, seen := r.owner[n]; seen {
-			return
+	r.claim(&doc, d)
+	return d, nil
+}
+
+// claim records d as the document of n and everything under it, and
+// collects anchors. A schema with an $id starts a document of its own,
+// located at the $id: a $ref to that URL finds it without fetching, and
+// relative $refs inside it resolve against it, as JSON Schema says.
+func (r *reader) claim(n *yaml.Node, d *document) {
+	if _, seen := r.owner[n]; seen {
+		return
+	}
+	if n.Kind == yaml.MappingNode {
+		if id := get(n, "$id"); id != nil && id.Kind == yaml.ScalarNode && id.Value != "" {
+			target, frag, _ := strings.Cut(id.Value, "#")
+			if target == "" {
+				// An $id of only "#name" is the older spelling of $anchor.
+				r.anchor(d, frag, n)
+			} else if loc, err := locate(d.loc, target); err != nil {
+				r.warn(id, "$id %q is not a location bollworm can use (%v); $refs to it will not resolve", id.Value, err)
+			} else if _, taken := r.docs[loc]; !taken {
+				d = &document{loc: loc, root: n}
+				r.docs[loc] = d
+			}
 		}
-		r.owner[n] = d
-		for _, c := range n.Content {
-			walk(c)
+		for _, key := range []string{"$anchor", "$dynamicAnchor"} {
+			if a := get(n, key); a != nil && a.Kind == yaml.ScalarNode {
+				r.anchor(d, a.Value, n)
+			}
 		}
 	}
-	walk(&doc)
-	return d, nil
+	r.owner[n] = d
+	for _, c := range n.Content {
+		r.claim(c, d)
+	}
+}
+
+func (r *reader) anchor(d *document, name string, n *yaml.Node) {
+	if name == "" {
+		return
+	}
+	if r.anchors[d] == nil {
+		r.anchors[d] = map[string]*yaml.Node{}
+	}
+	if _, ok := r.anchors[d][name]; !ok {
+		r.anchors[d][name] = n
+	}
 }
 
 // resolve follows n's $ref, if it has one, to the node it names.
@@ -74,7 +109,7 @@ func (r *reader) follow(n *yaml.Node) (*yaml.Node, string, error) {
 	n = deref(n)
 	last := ""
 	for hops := 0; ; hops++ {
-		ref := get(n, "$ref")
+		ref := refOf(n)
 		if ref == nil || ref.Kind != yaml.ScalarNode {
 			return n, last, nil
 		}
@@ -106,7 +141,10 @@ func (r *reader) pointer(ref *yaml.Node) (*yaml.Node, error) {
 		return nil, r.errAt(ref, "$ref %q is not a valid URI fragment", v)
 	}
 	if frag != "" && !strings.HasPrefix(frag, "/") {
-		return nil, r.errAt(ref, "$ref %q uses a named anchor; only JSON pointers like #/components/schemas/Pet are supported", v)
+		if n := r.anchors[d][frag]; n != nil {
+			return n, nil
+		}
+		return nil, r.errAt(ref, "$ref %q does not resolve: no $anchor named %q", v, frag)
 	}
 	n := d.root
 	if frag == "" {
@@ -133,21 +171,34 @@ func (r *reader) pointer(ref *yaml.Node) (*yaml.Node, error) {
 
 // load returns the document a $ref in from names, reading it on first use.
 func (r *reader) load(from *document, target string, ref *yaml.Node) (*document, error) {
+	// A document already read, or a schema's $id, is found without
+	// opening anything.
+	loc, err := locate(from.loc, target)
+	if err == nil {
+		if d, ok := r.docs[loc]; ok {
+			return d, nil
+		}
+	}
 	if r.open == nil {
 		return nil, r.errAt(ref, "$ref %q points outside this file; bundle the document into one file first (for example with redocly bundle)", ref.Value)
 	}
-	loc, err := locate(from.loc, target)
 	if err != nil {
 		return nil, r.errAt(ref, "$ref %q: %v", ref.Value, err)
-	}
-	if d, ok := r.docs[loc]; ok {
-		return d, nil
 	}
 	if len(r.docs) >= maxDocuments {
 		return nil, r.errAt(ref, "$ref %q would be document number %d; more than %d is refused", ref.Value, len(r.docs)+1, maxDocuments)
 	}
+	if r.badDocs[loc] {
+		return nil, &Error{Msg: "already reported", reported: true}
+	}
 	src, err := r.open(loc)
 	if err != nil {
+		// Every other $ref into the same document would fail the same way;
+		// the first says why.
+		if r.badDocs == nil {
+			r.badDocs = map[string]bool{}
+		}
+		r.badDocs[loc] = true
 		return nil, r.errAt(ref, "$ref %q: %v", ref.Value, err)
 	}
 	return r.addDocument(loc, src)
