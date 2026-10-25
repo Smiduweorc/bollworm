@@ -1,0 +1,95 @@
+openrpc: 1.3.2
+info:
+  title: Hive
+  version: 2.1.0
+  description: Counts the bees in a hive and tells the keeper when to look in.
+  contact: {name: Keeper, email: keeper@example.org}
+  license: {name: MIT, url: https://opensource.org/licenses/MIT}
+servers:
+  - url: https://hive.example.org/rpc
+    description: Production
+  - url: http://localhost:8545
+    description: Local node
+methods:
+  - name: hive_count
+    summary: Count bees
+    description: Returns how many bees are in a frame, or in the whole hive.
+    tags: [{$ref: "#/components/tags/frames"}]
+    paramStructure: by-position
+    params:
+      - {$ref: "#/components/contentDescriptors/Frame"}
+      - name: caste
+        schema: {$ref: "#/components/schemas/Caste"}
+    result:
+      name: count
+      description: The number of bees.
+      schema: {type: integer, minimum: 0}
+    errors:
+      - {$ref: "#/components/errors/NoSuchFrame"}
+      - {code: -32602, message: Invalid params}
+    examples:
+      - name: workers
+        summary: Workers in frame 3
+        params:
+          - {name: frame, value: 3}
+          - {$ref: "#/components/examples/worker"}
+        result: {name: count, value: 2180}
+  - name: hive_inspect
+    summary: Inspect a frame
+    tags: [{name: frames}]
+    paramStructure: by-name
+    params:
+      - {$ref: "#/components/contentDescriptors/Frame"}
+      - name: deep
+        summary: Look under the comb as well.
+        deprecated: true
+        schema: {type: boolean, default: false}
+    result:
+      name: report
+      schema: {$ref: "#/components/schemas/Report"}
+    examples:
+      - name: shallow
+        params: [{name: frame, value: 1}]
+        result: {name: report, value: {frame: 1, queen: true, notes: [capped brood]}}
+  - name: hive_subscribe
+    summary: Count bees
+    description: Sends a count every minute until the connection closes.
+    tags: [{name: watch, description: Calls that keep sending.}]
+    params: []
+    result:
+      name: subscription
+      schema: {type: string}
+  - name: hive_ping
+    description: Tells the hive a keeper is near. Nothing comes back.
+    deprecated: true
+    params:
+      - name: keeper
+        required: true
+        schema: {type: string, maxLength: 40}
+components:
+  tags:
+    frames:
+      name: frames
+      description: Calls about one frame of the hive.
+  contentDescriptors:
+    Frame:
+      name: frame
+      description: The frame, counted from the entrance.
+      required: true
+      schema: {type: integer, minimum: 1, maximum: 10}
+  errors:
+    NoSuchFrame: {code: 4004, message: There is no frame with that number}
+  examples:
+    worker: {name: caste, value: worker}
+  schemas:
+    Caste:
+      type: string
+      enum: [queen, worker, drone]
+    Report:
+      type: object
+      description: What the keeper saw.
+      required: [frame, queen]
+      properties:
+        frame: {type: integer}
+        queen: {type: boolean, description: Whether the queen was seen.}
+        notes: {type: array, items: {type: string}}
