@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"encoding/xml"
+	"errors"
 	"io"
 	"os"
 	"regexp"
@@ -43,7 +44,7 @@ func wellFormed(t testing.TB, data []byte) string {
 		rc.Close()
 		dec := xml.NewDecoder(bytes.NewReader(b))
 		for {
-			if _, err := dec.Token(); err == io.EOF {
+			if _, err := dec.Token(); errors.Is(err, io.EOF) {
 				break
 			} else if err != nil {
 				t.Fatalf("%s is not well-formed: %v", f.Name, err)
@@ -119,26 +120,30 @@ func TestContentsMatchTheBodyInOrder(t *testing.T) {
 }
 
 func TestEveryInternalLinkHasATarget(t *testing.T) {
-	for _, name := range []string{"aur.json", "petstore3.json", "features.yaml"} {
+	for _, name := range []string{"aur.json", "petstore3.json", "features.yaml", "openrpc-petstore.json", "openrpc-features.yaml"} {
 		src, err := os.ReadFile("../../testdata/" + name)
 		if err != nil {
 			t.Fatal(err)
 		}
-		doc := document(t, string(src))
-		marks := map[string]bool{}
-		for _, m := range regexp.MustCompile(`w:bookmarkStart w:id="\d+" w:name="([^"]+)"`).FindAllStringSubmatch(doc, -1) {
-			if marks[m[1]] {
-				t.Errorf("%s: bookmark %s defined twice", name, m[1])
-			}
-			if len(m[1]) > 40 || !regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`).MatchString(m[1]) {
-				t.Errorf("%s: bookmark name %q is not one Word accepts", name, m[1])
-			}
-			marks[m[1]] = true
+		linksResolve(t, name, document(t, string(src)))
+	}
+}
+
+func linksResolve(t *testing.T, name, doc string) {
+	t.Helper()
+	marks := map[string]bool{}
+	for _, m := range regexp.MustCompile(`w:bookmarkStart w:id="\d+" w:name="([^"]+)"`).FindAllStringSubmatch(doc, -1) {
+		if marks[m[1]] {
+			t.Errorf("%s: bookmark %s defined twice", name, m[1])
 		}
-		for _, m := range regexp.MustCompile(`w:anchor="([^"]+)"`).FindAllStringSubmatch(doc, -1) {
-			if !marks[m[1]] {
-				t.Errorf("%s: link to missing bookmark %s", name, m[1])
-			}
+		if len(m[1]) > 40 || !regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`).MatchString(m[1]) {
+			t.Errorf("%s: bookmark name %q is not one Word accepts", name, m[1])
+		}
+		marks[m[1]] = true
+	}
+	for _, m := range regexp.MustCompile(`w:anchor="([^"]+)"`).FindAllStringSubmatch(doc, -1) {
+		if !marks[m[1]] {
+			t.Errorf("%s: link to missing bookmark %s", name, m[1])
 		}
 	}
 }
@@ -598,7 +603,7 @@ func TestAnchor(t *testing.T) {
 // either accepts it or refuses it with an error, and anything accepted
 // renders to a package whose every part is well-formed XML.
 func FuzzRender(f *testing.F) {
-	for _, name := range []string{"aur.json", "petstore3.json", "features.yaml"} {
+	for _, name := range []string{"aur.json", "petstore3.json", "features.yaml", "openrpc-petstore.json", "openrpc-features.yaml"} {
 		src, err := os.ReadFile("../../testdata/" + name)
 		if err != nil {
 			f.Fatal(err)

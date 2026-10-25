@@ -1,0 +1,26 @@
+syntax = "proto3";
+
+// A hat shop, laid out the way Twirp and Connect services usually are: unary
+// calls, no HTTP annotations, the request and response named after the call.
+package haberdasher.v1;
+
+// Makes hats to measure.
+service Haberdasher {
+  // Makes a hat for a head of the given size.
+  rpc MakeHat(MakeHatRequest) returns (MakeHatResponse);
+}
+
+message MakeHatRequest {
+  // Head circumference in centimetres. Must be positive.
+  int32 centimetres = 1;
+}
+
+message MakeHatResponse {
+  Hat hat = 1;
+}
+
+message Hat {
+  int32 centimetres = 1;
+  string colour = 2;
+  string name = 3;
+}

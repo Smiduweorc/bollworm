@@ -62,7 +62,7 @@ func TestVersionsRefused(t *testing.T) {
 		want string
 	}{
 		{"swagger: '2.0'\ninfo: {title: t}\n", 1, "Swagger 2.0 document"},
-		{"info: {title: t}\n", 0, `no "openapi" version field`},
+		{"info: {title: t}\n", 0, `no "openapi" or "openrpc" version field`},
 		{"info: {title: t}\nopenapi: 4.0.0\n", 2, "OpenAPI 4.0.0 is not supported"},
 		{"openapi: 3.10.0\n", 1, "OpenAPI 3.10.0 is not supported"},
 		{"openapi: 2.0.0\n", 1, "OpenAPI 2.0.0 is not supported"},
@@ -91,7 +91,7 @@ func TestMalformedDocumentsAreRefused(t *testing.T) {
 
 func TestJSONIsRead(t *testing.T) {
 	s := parse(t, `{"openapi": "3.0.3", "info": {"title": "J", "version": "9"}, "paths": {"/a": {"get": {"summary": "A", "responses": {"200": {"description": "ok"}}}}}}`)
-	if s.Title != "J" || s.APIVersion != "9" || len(ops(s)) != 1 || ops(s)[0].Responses[0].Status != "200" {
+	if s.Title != "J" || s.APIVersion != "9" || len(ops(s)) != 1 || ops(s)[0].HTTP.Responses[0].Status != "200" {
 		t.Errorf("unexpected spec: %+v", s)
 	}
 }
@@ -201,7 +201,7 @@ x:
         - {type: string}
         - {type: integer}
 `)
-	got := ops(s)[0].Responses[0].Content[0].Schema
+	got := ops(s)[0].HTTP.Responses[0].Content[0].Schema
 	if !slices.Equal(got.Types, []string{"integer"}) {
 		t.Errorf("got %+v", got)
 	}
@@ -437,7 +437,7 @@ paths:
 `)
 	var got []string
 	for _, op := range ops(s) {
-		got = append(got, op.Method)
+		got = append(got, op.HTTP.Method)
 	}
 	if !slices.Equal(got, []string{"GET", "POST", "DELETE", "TRACE", "QUERY", "PURGE"}) {
 		t.Errorf("got %v", got)
@@ -460,15 +460,15 @@ paths:
 `)
 	get, post := ops(s)[0], ops(s)[1]
 	var got []string
-	for _, p := range get.Parameters {
+	for _, p := range get.HTTP.Parameters {
 		got = append(got, p.In+":"+p.Name+":"+p.Description)
 	}
 	want := []string{"path:id:shared id", "header:q:header q", "query:q:own q", "query:extra:"}
 	if !slices.Equal(got, want) {
 		t.Errorf("get: got %v, want %v", got, want)
 	}
-	if len(post.Parameters) != 3 {
-		t.Errorf("post inherits all three shared parameters, got %d", len(post.Parameters))
+	if len(post.HTTP.Parameters) != 3 {
+		t.Errorf("post inherits all three shared parameters, got %d", len(post.HTTP.Parameters))
 	}
 }
 
@@ -486,7 +486,7 @@ paths:
               schema: {type: object}
         - {name: c, in: cookie}
 `)
-	p := ops(s)[0].Parameters
+	p := ops(s)[0].HTTP.Parameters
 	if !p[0].Required || !p[0].Deprecated || p[0].Example.Value != "3" || !slices.Equal(p[0].Schema.Types, []string{"integer"}) {
 		t.Errorf("a: %+v", p[0])
 	}
@@ -523,20 +523,20 @@ components:
     key: {type: apiKey, in: header, name: K}
 `)
 	o := ops(s)
-	if len(o[0].Security) != 1 || o[0].Security[0][0].Name != "key" {
-		t.Errorf("inherit: %+v", o[0].Security)
+	if len(o[0].HTTP.Security) != 1 || o[0].HTTP.Security[0][0].Name != "key" {
+		t.Errorf("inherit: %+v", o[0].HTTP.Security)
 	}
-	if o[1].Security == nil || len(o[1].Security) != 0 {
-		t.Errorf("security: [] is an explicit empty requirement, got %#v", o[1].Security)
+	if o[1].HTTP.Security == nil || len(o[1].HTTP.Security) != 0 {
+		t.Errorf("security: [] is an explicit empty requirement, got %#v", o[1].HTTP.Security)
 	}
-	own := o[2].Security
+	own := o[2].HTTP.Security
 	if len(own) != 2 || len(own[0]) != 2 || own[0][0].Name != "oauth" || !slices.Equal(own[0][0].Scopes, []string{"read", "write"}) || len(own[1]) != 0 {
 		t.Errorf("own: %+v", own)
 	}
-	if s.Webhooks[0].Security != nil {
+	if s.Webhooks[0].HTTP.Security != nil {
 		t.Error("a webhook does not inherit the document's security")
 	}
-	if len(s.Webhooks[1].Security) != 1 {
+	if len(s.Webhooks[1].HTTP.Security) != 1 {
 		t.Error("a webhook keeps its own security")
 	}
 }
@@ -611,10 +611,10 @@ components:
     E: {summary: Shared, value: 4}
 `)
 	op := ops(s)[0]
-	if b := op.RequestBody; b == nil || !b.Required || b.Description != "body" || b.Content[0].Type != "text/plain" {
-		t.Errorf("body: %+v", op.RequestBody)
+	if b := op.HTTP.RequestBody; b == nil || !b.Required || b.Description != "body" || b.Content[0].Type != "text/plain" {
+		t.Errorf("body: %+v", op.HTTP.RequestBody)
 	}
-	r := op.Responses[0]
+	r := op.HTTP.Responses[0]
 	if r.Status != "201" || r.Description != "made" {
 		t.Errorf("response: %+v", r)
 	}
@@ -649,7 +649,7 @@ paths:
         "200": *resp
         "404": *resp
 `)
-	r := ops(s)[0].Responses
+	r := ops(s)[0].HTTP.Responses
 	if len(r) != 2 || r[0].Description != "shared response" || r[1].Description != "shared response" {
 		t.Errorf("responses: %+v %+v", r[0], r[1])
 	}
@@ -704,7 +704,7 @@ func TestAURDocumentShape(t *testing.T) {
 		t.Errorf("title %q, %d groups, %d models", s.Title, len(s.Groups), len(s.Models))
 	}
 	search := s.Groups[0].Operations[0]
-	if search.Path != "/rpc/v5/search/{arg}" || len(search.Parameters) != 2 || search.Parameters[1].Name != "by" || len(search.Parameters[1].Schema.Enum) != 14 {
+	if search.HTTP.Path != "/rpc/v5/search/{arg}" || len(search.HTTP.Parameters) != 2 || search.HTTP.Parameters[1].Name != "by" || len(search.HTTP.Parameters[1].Schema.Enum) != 14 {
 		t.Errorf("search: %+v", search)
 	}
 }

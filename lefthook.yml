@@ -4,6 +4,8 @@
 
 pre-commit:
   commands:
+    go-version:
+      run: make go-version
     fmt:
       glob: "*.go"
       run: make fmt FILES="{staged_files}"

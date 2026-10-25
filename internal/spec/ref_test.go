@@ -68,7 +68,7 @@ paths:
 	if !slices.Equal(modelNames(s), []string{"Pet", "Owner"}) {
 		t.Errorf("models: %v", modelNames(s))
 	}
-	pet := ops(s)[0].Responses[0].Content[0].Schema
+	pet := ops(s)[0].HTTP.Responses[0].Content[0].Schema
 	if pet.Name != "Pet" || pet.Properties[0].Schema.Name != "Owner" {
 		t.Errorf("pet: %+v", pet)
 	}

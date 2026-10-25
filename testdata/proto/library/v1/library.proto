@@ -1,0 +1,151 @@
+syntax = "proto3";
+
+// The lending library's catalogue: shelves, the books on them, and the
+// readers who borrow them.
+//
+// Book names are paths, `shelves/{shelf}/books/{book}`.
+package library.v1;
+
+import "google/api/annotations.proto";
+import "google/protobuf/any.proto";
+import "google/protobuf/duration.proto";
+import "google/protobuf/empty.proto";
+import "google/protobuf/field_mask.proto";
+import "google/protobuf/timestamp.proto";
+import "library/v1/common.proto";
+
+// Reads and changes the catalogue.
+service Library {
+  // Returns one book.
+  rpc GetBook(GetBookRequest) returns (Book) {
+    option (google.api.http) = {get: "/v1/{name=shelves/*/books/*}"};
+  }
+
+  // Streams every book on a shelf, in shelf order.
+  rpc ListBooks(ListBooksRequest) returns (stream Book);
+
+  // Takes a stream of books, files each one, and reports how many it
+  // took when the client closes the stream.
+  rpc ImportBooks(stream Book) returns (ImportBooksResponse);
+
+  // Changes the fields named in `update_mask`.
+  rpc UpdateBook(UpdateBookRequest) returns (Book) {
+    option (google.api.http) = {
+      patch: "/v1/{book.name=shelves/*/books/*}"
+      body: "book"
+      additional_bindings {put: "/v1/{book.name=shelves/*/books/*}" body: "*"}
+    };
+  }
+
+  // Returns the price alone.
+  rpc GetPrice(GetBookRequest) returns (Book) {
+    option (google.api.http) = {
+      get: "/v1/{name=shelves/*/books/*}/price"
+      response_body: "price"
+    };
+  }
+
+  // Removes a book. Use `UpdateBook` to mark it withdrawn instead.
+  rpc DeleteBook(GetBookRequest) returns (google.protobuf.Empty) {
+    option deprecated = true;
+    option (google.api.http) = {delete: "/v1/{name=shelves/*/books/*}"};
+  }
+}
+
+// A group of readers working through a shelf together.
+service ReadingGroup {
+  // A discussion: each side sends notes as they come.
+  rpc Discuss(stream Note) returns (stream Note);
+
+  // Streams the books on the group's shelf that the group has finished.
+  rpc ListBooks(ListBooksRequest) returns (stream Book);
+}
+
+// A book in the catalogue.
+message Book {
+  // How a copy is made.
+  enum Format {
+    FORMAT_UNSPECIFIED = 0;
+    // Printed and bound.
+    HARDCOVER = 1;
+    PAPERBACK = 2;
+    // A file the reader downloads.
+    EBOOK = 3;
+  }
+
+  // One printing of the book.
+  message Edition {
+    int32 number = 1;
+    google.protobuf.Timestamp printed = 2;
+  }
+
+  // The book's path, `shelves/{shelf}/books/{book}`.
+  string name = 1;
+  string title = 2;
+  // In the order the title page lists them.
+  repeated string authors = 3;
+  Format format = 4;
+
+  // The identifier the book was catalogued under.
+  oneof identifier {
+    string isbn = 5; // ISBN-13, digits only.
+    string asin = 6;
+  }
+
+  // Free-form labels, such as `condition: worn`.
+  map<string, string> labels = 7;
+  google.protobuf.Timestamp published = 8;
+  // How long a reader may keep it.
+  google.protobuf.Duration loan_period = 9;
+  google.protobuf.Any extra = 10;
+  repeated Edition editions = 11;
+  // Books shelved next to this one.
+  repeated Book related = 12;
+  // Unset when the page count is not known.
+  optional int32 pages = 13;
+  Money price = 14;
+  // Use `labels` instead.
+  string shelf_mark = 15 [deprecated = true];
+}
+
+// A shelf and what is on it.
+message Shelf {
+  string name = 1;
+  Genre genre = 2;
+  // Keyed by position on the shelf, from 1 at the left.
+  map<int32, Book> books_by_position = 3;
+}
+
+// The section of the library a shelf is in.
+enum Genre {
+  GENRE_UNSPECIFIED = 0;
+  FICTION = 1;
+  HISTORY = 2;
+  // Merged into HISTORY.
+  BIOGRAPHY = 3 [deprecated = true];
+  POETRY = 10;
+}
+
+message GetBookRequest {
+  string name = 1;
+}
+
+message ListBooksRequest {
+  // The shelf, `shelves/{shelf}`.
+  string parent = 1;
+}
+
+message ImportBooksResponse {
+  int32 imported = 1;
+}
+
+message UpdateBookRequest {
+  Book book = 1;
+  google.protobuf.FieldMask update_mask = 2;
+}
+
+// A note in a discussion.
+message Note {
+  string text = 1;
+  google.protobuf.Timestamp sent = 2;
+}

@@ -1,0 +1,13 @@
+syntax = "proto3";
+
+package library.v1;
+
+// An amount of money in one currency, the way google.type.Money spells it.
+message Money {
+  // ISO 4217 code, such as `EUR`.
+  string currency_code = 1;
+  // Whole units of the currency.
+  int64 units = 2;
+  // Billionths of a unit, with the same sign as `units`.
+  int32 nanos = 3;
+}

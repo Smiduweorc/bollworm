@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Renders the specs in testdata/ and validates each WordprocessingML part
-# against the ECMA-376 transitional schema. Word refuses or "repairs" a file
-# whose elements are out of schema order, and well-formed XML does not catch
-# that; this does.
+# Renders the OpenAPI, OpenRPC and .proto fixtures in testdata/ and validates
+# each WordprocessingML part against the ECMA-376 transitional schema. Word
+# refuses or "repairs" a file whose elements are out of schema order, and
+# well-formed XML does not catch that; this does.
 #
 # The schemas come from python-docx's repository, pinned to one commit so the
 # check cannot change under us. They are cached in build/xsd.
@@ -25,13 +25,13 @@ fetch wml.xsd
 # Follow imports until no schema names one we do not have.
 while :; do
 	missing=0
-	for f in $(grep -ho 'schemaLocation="[^"]*"' "$xsd"/*.xsd | sed 's/.*="//; s/"$//' | sort -u); do
+	while read -r f; do
 		[ "$f" = xml.xsd ] && continue
 		if [ ! -s "$xsd/$f" ]; then
 			fetch "$f"
 			missing=1
 		fi
-	done
+	done < <(grep -ho 'schemaLocation="[^"]*"' "$xsd"/*.xsd | sed 's/.*="//; s/"$//' | sort -u)
 	[ "$missing" = 0 ] && break
 done
 
@@ -55,12 +55,16 @@ go build -o "$out/bollworm" "$root/cmd/bollworm"
 failed=0
 # strava.json is left out: its $refs are fetched from developers.strava.com,
 # and this check must not depend on someone else's server.
-for spec in "$root"/testdata/aur.json "$root"/testdata/petstore3.json "$root"/testdata/features.yaml; do
+for spec in "$root"/testdata/aur.json "$root"/testdata/petstore3.json "$root"/testdata/features.yaml \
+	"$root"/testdata/openrpc-petstore.json "$root"/testdata/openrpc-features.yaml \
+	"$root"/testdata/proto/library/v1/library.proto "$root"/testdata/proto/haberdasher/v1/haberdasher.proto; do
 	name=$(basename "$spec")
+	args=()
+	case "$spec" in *.proto) args=(--proto-path "$root/testdata/proto") ;; esac
 	for paper in a4 letter; do
 		dir="$out/$name.$paper"
 		mkdir -p "$dir"
-		"$out/bollworm" render "$spec" -o "$dir.docx" --paper "$paper"
+		"$out/bollworm" render "$spec" -o "$dir.docx" --paper "$paper" "${args[@]}"
 		(cd "$dir" && unzip -q "$dir.docx")
 		for part in "$dir"/word/*.xml; do
 			if ! xmllint --noout --schema "$xsd/wml.xsd" "$part" 2>"$dir.err"; then
