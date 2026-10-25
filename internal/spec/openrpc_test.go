@@ -154,7 +154,7 @@ func TestOpenRPCDefaultsAndNotifications(t *testing.T) {
 
 func TestOpenRPCErrorsAndExamples(t *testing.T) {
 	count := method(t, features(t), "hive_count").JSONRPC
-	if len(count.Errors) != 2 || count.Errors[0] != (RPCError{"4004", "There is no frame with that number"}) || count.Errors[1].Code != "-32602" {
+	if len(count.Errors) != 2 || count.Errors[0].Code != "4004" || count.Errors[0].Message != "There is no frame with that number" || count.Errors[1].Code != "-32602" {
 		t.Errorf("errors: %+v", count.Errors)
 	}
 	if len(count.Examples) != 1 {

@@ -154,7 +154,7 @@ paths:
 func TestRefsThatDoNotResolveAreRefused(t *testing.T) {
 	cases := map[string]string{
 		"#/components/schemas/Missing": `nothing at "Missing"`,
-		"#Pet":                         "named anchor",
+		"#Pet":                         `no $anchor named "Pet"`,
 		"#/components/schemas/A/0":     `nothing at "0"`,
 		"#/x%zz":                       "not a valid URI fragment",
 	}

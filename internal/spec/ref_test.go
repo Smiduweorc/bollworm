@@ -268,7 +268,20 @@ func TestStravaNeedsItsRemoteDocuments(t *testing.T) {
 	refused := errors.New("offline")
 	_, err = Parse(src, abs("testdata/strava.json"), func(string) ([]byte, error) { return nil, refused })
 	want := `line 42: $ref "https://developers.strava.com/swagger/activity_stats.json#/ActivityStats": offline`
-	if err == nil || err.Error() != want {
-		t.Errorf("got %v", err)
+	var errs Errors
+	if !errors.As(err, &errs) || errs[0].Error() != want {
+		t.Fatalf("got %v", err)
+	}
+	// Every unreachable document is reported, each once.
+	seen := map[string]bool{}
+	for _, e := range errs {
+		doc, _, _ := strings.Cut(strings.Split(e.Msg, `"`)[1], "#")
+		if seen[doc] {
+			t.Errorf("%s reported twice", doc)
+		}
+		seen[doc] = true
+	}
+	if len(seen) < 10 {
+		t.Errorf("only %d documents reported", len(seen))
 	}
 }

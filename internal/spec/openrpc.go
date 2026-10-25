@@ -1,6 +1,7 @@
 package spec
 
 import (
+	"slices"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -18,24 +19,26 @@ func (r *reader) readOpenRPC(v *yaml.Node) (*Spec, error) {
 	}
 	var g grouper
 	for _, mn := range items(methods) {
-		op, tag, err := r.readMethod(mn, &g)
+		op, tags, err := r.readMethod(mn, &g)
 		if err != nil {
-			return nil, err
+			r.fail(err)
+			continue
 		}
-		g.file(tag, op)
+		g.file(tags, op)
 	}
 	s.Groups = g.done()
-	return s, r.readModels(s)
+	r.readModels(s)
+	return r.finish(s)
 }
 
-func (r *reader) readMethod(mn *yaml.Node, g *grouper) (*Operation, string, error) {
+func (r *reader) readMethod(mn *yaml.Node, g *grouper) (*Operation, []string, error) {
 	n, err := r.resolve(mn)
 	if err != nil {
-		return nil, "", err
+		return nil, nil, err
 	}
 	name := get(n, "name")
 	if str(name) == "" {
-		return nil, "", r.errAt(n, "a method needs a name")
+		return nil, nil, r.errAt(n, "a method needs a name")
 	}
 	m := &Method{ParamStructure: str(get(n, "paramStructure"))}
 	if m.ParamStructure == "" {
@@ -44,68 +47,77 @@ func (r *reader) readMethod(mn *yaml.Node, g *grouper) (*Operation, string, erro
 	switch m.ParamStructure {
 	case "by-name", "by-position", "either":
 	default:
-		return nil, "", r.errAt(get(n, "paramStructure"), `paramStructure must be "by-name", "by-position" or "either", not %q`, m.ParamStructure)
+		return nil, nil, r.errAt(get(n, "paramStructure"), `paramStructure must be "by-name", "by-position" or "either", not %q`, m.ParamStructure)
 	}
 	op := &Operation{
-		ID:          name.Value,
-		Summary:     str(get(n, "summary")),
-		Description: str(get(n, "description")),
-		Deprecated:  boolean(get(n, "deprecated")),
-		JSONRPC:     m,
+		ID:           name.Value,
+		Summary:      str(get(n, "summary")),
+		Description:  str(get(n, "description")),
+		Deprecated:   boolean(get(n, "deprecated")),
+		JSONRPC:      m,
+		ExternalDocs: externalDocs(get(n, "externalDocs")),
 	}
+	m.Servers = readServers(get(n, "servers"))
 	for _, pn := range items(get(n, "params")) {
 		p, err := r.contentDescriptor(pn)
 		if err != nil {
-			return nil, "", err
+			return nil, nil, err
 		}
 		m.Params = append(m.Params, p)
 	}
 	if rn := get(n, "result"); rn != nil {
 		if m.Result, err = r.contentDescriptor(rn); err != nil {
-			return nil, "", err
+			return nil, nil, err
 		}
 	}
 	for _, en := range items(get(n, "errors")) {
 		e, err := r.resolve(en)
 		if err != nil {
-			return nil, "", err
+			return nil, nil, err
 		}
-		m.Errors = append(m.Errors, RPCError{Code: str(get(e, "code")), Message: str(get(e, "message"))})
+		m.Errors = append(m.Errors, RPCError{Code: str(get(e, "code")), Message: str(get(e, "message")), Data: get(e, "data")})
 	}
 	for _, xn := range items(get(n, "examples")) {
 		x, err := r.resolve(xn)
 		if err != nil {
-			return nil, "", err
+			return nil, nil, err
 		}
 		p := Pairing{Name: str(get(x, "name")), Summary: str(get(x, "summary")), Description: str(get(x, "description"))}
 		for _, vn := range items(get(x, "params")) {
 			ex, err := r.resolve(vn)
 			if err != nil {
-				return nil, "", err
+				return nil, nil, err
 			}
-			p.Params = append(p.Params, ParamValue{Name: str(get(ex, "name")), Value: get(ex, "value")})
+			p.Params = append(p.Params, ParamValue{Name: str(get(ex, "name")), Value: get(ex, "value"), External: str(get(ex, "externalValue"))})
 		}
 		if rn := get(x, "result"); rn != nil {
 			ex, err := r.resolve(rn)
 			if err != nil {
-				return nil, "", err
+				return nil, nil, err
 			}
-			p.Result = get(ex, "value")
+			p.Result, p.ResultExternal = get(ex, "value"), str(get(ex, "externalValue"))
 		}
 		m.Examples = append(m.Examples, p)
 	}
-	var tag string
-	if ts := items(get(n, "tags")); len(ts) > 0 {
-		t, err := r.resolve(ts[0])
+	var tags []string
+	for _, tn := range items(get(n, "tags")) {
+		t, err := r.resolve(tn)
 		if err != nil {
-			return nil, "", err
+			return nil, nil, err
 		}
 		// Tags have no top-level list, so a chapter's description is
 		// whichever use of the tag first carries one.
-		tag = str(get(t, "name"))
-		g.add(tag, str(get(t, "description")))
+		tag := str(get(t, "name"))
+		if tag == "" || slices.Contains(tags, tag) {
+			continue
+		}
+		tags = append(tags, tag)
+		i := g.add(tag, str(get(t, "description")))
+		if g.groups[i].ExternalDocs == nil {
+			g.groups[i].ExternalDocs = externalDocs(get(t, "externalDocs"))
+		}
 	}
-	return op, tag, nil
+	return op, tags, nil
 }
 
 func (r *reader) contentDescriptor(n *yaml.Node) (*Parameter, error) {

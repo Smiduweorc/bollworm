@@ -329,7 +329,9 @@ func TestEnumValuesKeepNumbersAndComments(t *testing.T) {
 		{Name: "BIOGRAPHY", Number: 3, Description: "Merged into HISTORY.", Deprecated: true},
 		{Name: "POETRY", Number: 10},
 	}
-	if !slices.Equal(g.Values, want) || !slices.Equal(g.Types, []string{"enum"}) || g.Description != "The section of the library a shelf is in." {
+	if !slices.EqualFunc(g.Values, want, func(a, b spec.EnumValue) bool {
+		return a.Name == b.Name && a.Number == b.Number && a.Description == b.Description && a.Deprecated == b.Deprecated && len(a.Options) == 0
+	}) || !slices.Equal(g.Types, []string{"enum"}) || g.Description != "The section of the library a shelf is in." {
 		t.Errorf("%+v", g)
 	}
 }
