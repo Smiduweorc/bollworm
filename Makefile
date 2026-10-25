@@ -31,6 +31,11 @@ lint:
 	sh -n install.sh
 	for f in $(wildcard scripts/*.sh); do bash -n "$$f" || exit 1; done
 
+## go-version: fail if go.mod is behind the latest Go release (needs network, skips offline)
+.PHONY: go-version
+go-version:
+	scripts/check-go-version.sh
+
 ## test: the full suite with the race detector
 .PHONY: test
 test:
