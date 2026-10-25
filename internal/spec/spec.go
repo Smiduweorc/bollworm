@@ -1,6 +1,6 @@
-// Package spec reads an OpenAPI 3.x document into the model the renderer
-// walks. It owns every decision about what the document means: which version
-// is accepted, how $ref is resolved, how path-level parameters combine with an
+// Package spec holds the model the renderer walks and reads OpenAPI 3.x into
+// it, owning every decision about what a document means: which version is
+// accepted, how $ref is resolved, how path-level parameters combine with an
 // operation's own, and which order things appear in. The renderer never sees
 // a $ref or a YAML node.
 package spec
@@ -13,8 +13,10 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Spec is an OpenAPI document reduced to what a reference manual prints.
+// Spec is an API description reduced to what a reference manual prints.
 type Spec struct {
+	Format Format
+	// Version is the OpenAPI version, or the protobuf syntax.
 	Version     string
 	Title       string
 	APIVersion  string
@@ -24,17 +26,29 @@ type Spec struct {
 	Contact     Contact
 	License     License
 	Servers     []Server
-	// Groups holds every operation, grouped by its first tag. Groups are in
-	// the order of the top-level tags list, then any tag first seen on an
-	// operation, then the untagged operations last.
+	// Groups holds the operations by first tag: declared tags in order, then
+	// tags first seen on an operation, then the untagged operations.
 	Groups   []Group
 	Webhooks []*Operation
 	Schemes  []*SecurityScheme
-	// Security is the document-wide requirement, nil when the document has
-	// none.
+	// Security is the document-wide requirement, nil when there is none.
 	Security []Requirement
-	// Models are the schemas under components/schemas, in document order.
+	// Models are the schemas under components/schemas, in document order,
+	// or the messages and enums of a protobuf package.
 	Models []*Schema
+	Files  []File
+}
+
+type Format int
+
+const (
+	OpenAPI Format = iota
+	Protobuf
+	OpenRPC
+)
+
+type File struct {
+	Name, Package string
 }
 
 type Contact struct {
@@ -63,19 +77,80 @@ type Group struct {
 	Operations  []*Operation
 }
 
+// Operation is one call, whatever the protocol. Exactly one of HTTP, RPC
+// and JSONRPC is set.
 type Operation struct {
-	Method      string
-	Path        string
-	OperationID string
+	// ID is the operationId, or the rpc's or method's name.
+	ID          string
 	Summary     string
 	Description string
 	Deprecated  bool
+	// Input and Output are an rpc's messages; HTTP bodies are in Endpoint.
+	Input, Output *Schema
+	Streaming     Streaming
+	HTTP          *Endpoint
+	RPC           *RPC
+	JSONRPC       *Method
+}
+
+type Streaming int
+
+const (
+	Unary Streaming = iota
+	ServerStreaming
+	ClientStreaming
+	BidiStreaming
+)
+
+type Endpoint struct {
+	Method      string
+	Path        string
 	Parameters  []*Parameter
 	RequestBody *RequestBody
 	Responses   []*Response
 	// Security is the requirement that applies to this operation: its own
 	// when it declares one, otherwise the document's. Nil means none applies.
 	Security []Requirement
+}
+
+type RPC struct {
+	Service, Method string
+	Bindings        []Binding
+}
+
+// Method is an OpenRPC method; a nil Result makes it a notification.
+type Method struct {
+	// ParamStructure is "by-name", "by-position" or "either".
+	ParamStructure string
+	Params         []*Parameter
+	Result         *Parameter
+	Errors         []RPCError
+	Examples       []Pairing
+}
+
+type RPCError struct {
+	Code, Message string
+}
+
+// Pairing is an example call; Result is nil when it has none.
+type Pairing struct {
+	Name, Summary, Description string
+	Params                     []ParamValue
+	Result                     *yaml.Node
+}
+
+type ParamValue struct {
+	Name  string
+	Value *yaml.Node
+}
+
+// Binding is one google.api.http rule.
+type Binding struct {
+	Method, Path string
+	// Body is a request field, "*" for the whole request, or empty for none.
+	Body string
+	// ResponseBody is a response field, or empty for the whole response.
+	ResponseBody string
 }
 
 type Parameter struct {
@@ -134,9 +209,9 @@ type SecurityScheme struct {
 	Name        string
 	Type        string
 	Description string
-	// In and ParamName are set for apiKey.
-	In, ParamName string
-	// HTTPScheme and BearerFormat are set for http.
+	// In and ParamName are set for apiKey, HTTPScheme and BearerFormat for
+	// http.
+	In, ParamName            string
 	HTTPScheme, BearerFormat string
 	Flows                    []OAuthFlow
 	OpenIDConnectURL         string
@@ -178,6 +253,8 @@ type Schema struct {
 	// AdditionalProperties is the schema of a map's values, nil when the
 	// schema says nothing about extra keys or forbids them.
 	AdditionalProperties *Schema
+	// Key is the key type of a protobuf map; OpenAPI keys are strings.
+	Key                  *Schema
 	AllOf, OneOf, AnyOf  []*Schema
 	Not                  *Schema
 	Minimum, Maximum     string
@@ -188,12 +265,23 @@ type Schema struct {
 	MinItems, MaxItems   string
 	UniqueItems          bool
 	Pattern              string
+	// Values are a protobuf enum's values, with their numbers.
+	Values []EnumValue
+}
+
+type EnumValue struct {
+	Name        string
+	Number      int32
+	Description string
+	Deprecated  bool
 }
 
 type Property struct {
 	Name     string
 	Required bool
 	Schema   *Schema
+	Number   int32
+	Oneof    string
 }
 
 // Error is a refusal to read the document. Line is the 1-based line where
@@ -234,7 +322,6 @@ func (r *reader) errAt(n *yaml.Node, format string, args ...any) *Error {
 var methods = []string{"get", "put", "post", "delete", "options", "head", "patch", "trace", "query"}
 
 // Parse reads an OpenAPI 3.0, 3.1 or 3.2 document in YAML or JSON.
-//
 // location is where src came from: an absolute file path or an https URL.
 // A $ref to another document is resolved against it and handed to open,
 // which returns that document's bytes or the reason it will not. With a nil
@@ -268,8 +355,7 @@ type reader struct {
 	root *yaml.Node
 	open Opener
 	// docs holds every document read so far by location; owner maps each
-	// node to the document it is in, so a $ref resolves against the right
-	// one.
+	// node to its document, so a $ref resolves against the right one.
 	docs  map[string]*document
 	owner map[*yaml.Node]*document
 	// schemas memoises every schema by the node it was built from, which is
@@ -280,8 +366,7 @@ type reader struct {
 	// $ref named. taken is the reverse, to keep names unique.
 	names map[*yaml.Node]string
 	taken map[string]*yaml.Node
-	// external lists the models found in other documents, in the order they
-	// were first referenced.
+	// external lists models from other documents, first referenced first.
 	external []*yaml.Node
 }
 
@@ -289,32 +374,18 @@ func (r *reader) read() (*Spec, error) {
 	if sw := get(r.root, "swagger"); sw != nil {
 		return nil, r.errAt(sw, "this is a Swagger %s document; bollworm reads OpenAPI 3.0 and later, so convert it first (for example with swagger2openapi)", sw.Value)
 	}
+	if v := get(r.root, "openrpc"); v != nil {
+		return r.readOpenRPC(v)
+	}
 	v := get(r.root, "openapi")
 	if v == nil {
-		return nil, &Error{Msg: `no "openapi" version field; this does not look like an OpenAPI document`}
+		return nil, &Error{Msg: `no "openapi" or "openrpc" version field; this does not look like an OpenAPI or OpenRPC document`}
 	}
 	if !supported(v.Value) {
 		return nil, r.errAt(v, "OpenAPI %s is not supported; bollworm reads 3.0, 3.1 and 3.2", v.Value)
 	}
 	s := &Spec{Version: v.Value}
-
-	info := get(r.root, "info")
-	s.Title = str(get(info, "title"))
-	s.APIVersion = str(get(info, "version"))
-	s.Summary = str(get(info, "summary"))
-	s.Description = str(get(info, "description"))
-	s.TermsURL = str(get(info, "termsOfService"))
-	c := get(info, "contact")
-	s.Contact = Contact{Name: str(get(c, "name")), URL: str(get(c, "url")), Email: str(get(c, "email"))}
-	l := get(info, "license")
-	s.License = License{Name: str(get(l, "name")), URL: str(get(l, "url"))}
-	if s.License.URL == "" {
-		if id := str(get(l, "identifier")); id != "" {
-			s.License.URL = "https://spdx.org/licenses/" + id + ".html"
-		}
-	}
-	s.Servers = readServers(get(r.root, "servers"))
-
+	r.readInfo(s)
 	var err error
 	if s.Schemes, err = r.readSchemes(); err != nil {
 		return nil, err
@@ -332,14 +403,36 @@ func (r *reader) read() (*Spec, error) {
 	if s.Webhooks, err = r.readWebhooks(); err != nil {
 		return nil, err
 	}
+	return s, r.readModels(s)
+}
+
+func (r *reader) readInfo(s *Spec) {
+	info := get(r.root, "info")
+	s.Title = str(get(info, "title"))
+	s.APIVersion = str(get(info, "version"))
+	s.Summary = str(get(info, "summary"))
+	s.Description = str(get(info, "description"))
+	s.TermsURL = str(get(info, "termsOfService"))
+	c := get(info, "contact")
+	s.Contact = Contact{Name: str(get(c, "name")), URL: str(get(c, "url")), Email: str(get(c, "email"))}
+	l := get(info, "license")
+	s.License = License{Name: str(get(l, "name")), URL: str(get(l, "url"))}
+	if s.License.URL == "" {
+		if id := str(get(l, "identifier")); id != "" {
+			s.License.URL = "https://spdx.org/licenses/" + id + ".html"
+		}
+	}
+	s.Servers = readServers(get(r.root, "servers"))
+}
+
+func (r *reader) readModels(s *Spec) error {
 	seen := map[*Schema]bool{}
 	for _, kv := range pairs(get(get(r.root, "components"), "schemas")) {
 		m, err := r.schema(kv.val)
 		if err != nil {
-			return nil, err
+			return err
 		}
-		// A component that is only a $ref to another is that model again,
-		// not a second one.
+		// A component that is only a $ref to another is the same model.
 		if !seen[m] {
 			seen[m] = true
 			s.Models = append(s.Models, m)
@@ -351,7 +444,7 @@ func (r *reader) read() (*Spec, error) {
 			s.Models = append(s.Models, m)
 		}
 	}
-	return s, nil
+	return nil
 }
 
 func supported(v string) bool {
@@ -413,9 +506,8 @@ func (r *reader) readSchemes() ([]*SecurityScheme, error) {
 	return out, nil
 }
 
-// readSecurity returns a non-nil slice for an explicit empty list, because
-// "security: []" on an operation means "no authentication" and must not fall
-// back to the document's requirement.
+// readSecurity keeps an explicit empty list non-nil: "security: []" means no
+// authentication, not the document's requirement.
 func (r *reader) readSecurity(n *yaml.Node) ([]Requirement, error) {
 	if n.Kind != yaml.SequenceNode {
 		return nil, r.errAt(n, "security must be a list of requirement objects")
@@ -436,48 +528,65 @@ func (r *reader) readSecurity(n *yaml.Node) ([]Requirement, error) {
 }
 
 func (r *reader) readPaths(global []Requirement) ([]Group, error) {
-	var groups []Group
-	index := map[string]int{}
-	addGroup := func(name, desc string) int {
-		if i, ok := index[name]; ok {
-			return i
-		}
-		index[name] = len(groups)
-		groups = append(groups, Group{Name: name, Description: desc})
-		return len(groups) - 1
-	}
+	var g grouper
 	for _, t := range items(get(r.root, "tags")) {
-		addGroup(str(get(t, "name")), str(get(t, "description")))
+		g.add(str(get(t, "name")), str(get(t, "description")))
 	}
-	var untagged []*Operation
-
 	for _, kv := range pairs(get(r.root, "paths")) {
 		ops, tags, err := r.readPathItem(kv.key, kv.val, global)
 		if err != nil {
 			return nil, err
 		}
 		for i, op := range ops {
-			if tags[i] == "" {
-				untagged = append(untagged, op)
-				continue
-			}
-			g := addGroup(tags[i], "")
-			groups[g].Operations = append(groups[g].Operations, op)
+			g.file(tags[i], op)
 		}
 	}
+	return g.done(), nil
+}
 
-	// A tag declared at the top but used by no operation would print an
-	// empty chapter.
-	out := groups[:0]
-	for _, g := range groups {
-		if len(g.Operations) > 0 {
-			out = append(out, g)
+// grouper files operations under their first tag, in first-seen order.
+type grouper struct {
+	groups   []Group
+	index    map[string]int
+	untagged []*Operation
+}
+
+func (g *grouper) add(name, desc string) int {
+	if i, ok := g.index[name]; ok {
+		if g.groups[i].Description == "" {
+			g.groups[i].Description = desc
+		}
+		return i
+	}
+	if g.index == nil {
+		g.index = map[string]int{}
+	}
+	g.index[name] = len(g.groups)
+	g.groups = append(g.groups, Group{Name: name, Description: desc})
+	return len(g.groups) - 1
+}
+
+func (g *grouper) file(tag string, op *Operation) {
+	if tag == "" {
+		g.untagged = append(g.untagged, op)
+		return
+	}
+	i := g.add(tag, "")
+	g.groups[i].Operations = append(g.groups[i].Operations, op)
+}
+
+func (g *grouper) done() []Group {
+	// A declared tag no operation uses would print an empty chapter.
+	out := g.groups[:0]
+	for _, gr := range g.groups {
+		if len(gr.Operations) > 0 {
+			out = append(out, gr)
 		}
 	}
-	if len(untagged) > 0 {
-		out = append(out, Group{Operations: untagged})
+	if len(g.untagged) > 0 {
+		out = append(out, Group{Operations: g.untagged})
 	}
-	return out, nil
+	return out
 }
 
 func (r *reader) readWebhooks() ([]*Operation, error) {
@@ -492,8 +601,7 @@ func (r *reader) readWebhooks() ([]*Operation, error) {
 	return out, nil
 }
 
-// readPathItem returns the operations of one path, with the first tag of
-// each alongside it.
+// readPathItem returns a path's operations and the first tag of each.
 func (r *reader) readPathItem(path string, n *yaml.Node, global []Requirement) ([]*Operation, []string, error) {
 	item, err := r.resolve(n)
 	if err != nil {
@@ -529,20 +637,19 @@ func (r *reader) readPathItem(path string, n *yaml.Node, global []Requirement) (
 }
 
 func (r *reader) readOperation(method, path string, n *yaml.Node, shared []*Parameter, global []Requirement) (*Operation, string, error) {
+	ep := &Endpoint{Method: strings.ToUpper(method), Path: path, Security: global}
 	op := &Operation{
-		Method:      strings.ToUpper(method),
-		Path:        path,
-		OperationID: str(get(n, "operationId")),
+		ID:          str(get(n, "operationId")),
 		Summary:     str(get(n, "summary")),
 		Description: str(get(n, "description")),
 		Deprecated:  boolean(get(n, "deprecated")),
-		Security:    global,
+		HTTP:        ep,
 	}
 	own, err := r.readParameters(get(n, "parameters"))
 	if err != nil {
 		return nil, "", err
 	}
-	op.Parameters = mergeParameters(shared, own)
+	ep.Parameters = mergeParameters(shared, own)
 
 	if rb := get(n, "requestBody"); rb != nil {
 		rn, err := r.resolve(rb)
@@ -553,7 +660,7 @@ func (r *reader) readOperation(method, path string, n *yaml.Node, shared []*Para
 		if body.Content, err = r.readContent(get(rn, "content")); err != nil {
 			return nil, "", err
 		}
-		op.RequestBody = body
+		ep.RequestBody = body
 	}
 
 	for _, kv := range pairs(get(n, "responses")) {
@@ -576,11 +683,11 @@ func (r *reader) readOperation(method, path string, n *yaml.Node, shared []*Para
 		if resp.Content, err = r.readContent(get(rn, "content")); err != nil {
 			return nil, "", err
 		}
-		op.Responses = append(op.Responses, resp)
+		ep.Responses = append(ep.Responses, resp)
 	}
 
 	if sec := get(n, "security"); sec != nil {
-		if op.Security, err = r.readSecurity(sec); err != nil {
+		if ep.Security, err = r.readSecurity(sec); err != nil {
 			return nil, "", err
 		}
 	}
@@ -609,8 +716,7 @@ func (r *reader) readParameters(n *yaml.Node) ([]*Parameter, error) {
 		if param.Schema, err = r.optionalSchema(get(p, "schema")); err != nil {
 			return nil, err
 		}
-		// A parameter described by content instead of schema carries its
-		// schema one level down; the manual only needs the type.
+		// With content instead of schema, the schema is one level down.
 		if param.Schema == nil {
 			for _, kv := range pairs(get(p, "content")) {
 				if param.Schema, err = r.optionalSchema(get(kv.val, "schema")); err != nil {
@@ -680,9 +786,8 @@ func (r *reader) optionalSchema(n *yaml.Node) (*Schema, error) {
 	return r.schema(n)
 }
 
-// schema builds the Schema for n, following $ref. A schema already being
-// built is returned half-finished, which is how a recursive structure ends up
-// as a cycle of pointers instead of an infinite descent.
+// schema builds the Schema for n, following $ref. A schema still being built
+// is returned half-finished, so recursion becomes a cycle of pointers.
 func (r *reader) schema(n *yaml.Node) (*Schema, error) {
 	n = deref(n)
 	target := n
@@ -711,8 +816,7 @@ func (r *reader) schema(n *yaml.Node) (*Schema, error) {
 	if siblings == nil {
 		return s, nil
 	}
-	// Wrapped rather than copied: s may still be half-built when the
-	// reference is part of a cycle.
+	// Wrapped, not copied: s may still be half-built inside a cycle.
 	return &Schema{
 		AllOf:       []*Schema{s},
 		Description: str(get(siblings, "description")),
@@ -854,8 +958,8 @@ type pair struct {
 	val *yaml.Node
 }
 
-// pairs returns a mapping's entries in document order, which is the order
-// the author chose and the order the manual keeps.
+// pairs returns a mapping's entries in the author's order, which the manual
+// keeps.
 func pairs(n *yaml.Node) []pair {
 	n = deref(n)
 	if n == nil || n.Kind != yaml.MappingNode {

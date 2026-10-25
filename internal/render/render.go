@@ -128,18 +128,35 @@ func (r *renderer) titlePage(title string) {
 
 func (r *renderer) introduction() {
 	s := r.spec
-	if strings.TrimSpace(s.Description) == "" && len(s.Servers) == 0 {
+	if strings.TrimSpace(s.Description) == "" && len(s.Servers) == 0 && len(s.Files) == 0 {
 		return
 	}
 	r.doc.Heading(1, "Introduction", "")
 	r.write(markdown(r.doc, s.Description))
+	if len(s.Files) > 0 {
+		r.doc.Heading(2, "Files", "")
+		r.doc.Para(docx.Para{Inlines: []docx.Inline{{Text: "This document describes the services and messages in these files."}}})
+		t := docx.Table{Widths: []int{6, 5}, Header: []string{"File", "Package"}}
+		for _, f := range s.Files {
+			t.Rows = append(t.Rows, []docx.Cell{
+				{{Inlines: []docx.Inline{{Text: f.Name, Code: true}}}},
+				{{Inlines: []docx.Inline{{Text: f.Package, Code: true}}}},
+			})
+		}
+		r.doc.Table(t)
+	}
 	if len(s.Servers) == 0 {
 		return
 	}
 	r.doc.Heading(2, "Servers", "")
-	if len(s.Servers) == 1 {
+	switch {
+	case s.Format == spec.OpenRPC && len(s.Servers) == 1:
+		r.doc.Para(docx.Para{Inlines: []docx.Inline{{Text: "Every method is called at the following URL."}}})
+	case s.Format == spec.OpenRPC:
+		r.doc.Para(docx.Para{Inlines: []docx.Inline{{Text: "Every method can be called at any of the following URLs."}}})
+	case len(s.Servers) == 1:
 		r.doc.Para(docx.Para{Inlines: []docx.Inline{{Text: "Requests are made to the following base URL. Paths in this document are relative to it."}}})
-	} else {
+	default:
 		r.doc.Para(docx.Para{Inlines: []docx.Inline{{Text: "Requests can be made to any of the following base URLs. Paths in this document are relative to them."}}})
 	}
 	t := docx.Table{Widths: []int{5, 4}, Header: []string{"URL", "Description"}}
@@ -316,8 +333,11 @@ func (r *renderer) group(g spec.Group) {
 	name := g.Name
 	if name == "" {
 		name = "Endpoints"
+		if r.spec.Format == spec.OpenRPC {
+			name = "Methods"
+		}
 		if len(r.spec.Groups) > 1 {
-			name = "Other endpoints"
+			name = "Other " + strings.ToLower(name)
 		}
 	}
 	r.doc.Heading(1, name, "")
@@ -330,10 +350,10 @@ func (r *renderer) group(g spec.Group) {
 func operationTitle(op *spec.Operation) string {
 	title := op.Summary
 	if title == "" {
-		title = op.OperationID
+		title = op.ID
 	}
-	if title == "" {
-		title = op.Method + " " + op.Path
+	if title == "" && op.HTTP != nil {
+		title = op.HTTP.Method + " " + op.HTTP.Path
 	}
 	return strings.TrimSuffix(strings.TrimSpace(title), ".")
 }
@@ -341,39 +361,48 @@ func operationTitle(op *spec.Operation) string {
 // operation writes one endpoint. For a webhook, Path is the webhook's name
 // rather than a path on the API.
 func (r *renderer) operation(op *spec.Operation, webhook bool) {
+	if op.RPC != nil {
+		r.rpc(op)
+		return
+	}
+	if op.JSONRPC != nil {
+		r.jsonrpc(op)
+		return
+	}
+	ep := op.HTTP
 	title := operationTitle(op)
 	// Two endpoints with one summary would be two identical lines in the
 	// contents; the method tells them apart.
 	if r.titles[title] > 1 {
-		title += " (" + op.Method + ")"
+		title += " (" + ep.Method + ")"
 	}
 	r.doc.Heading(2, title, "")
 	if webhook {
-		r.doc.Para(docx.Para{Style: "Endpoint", Inlines: []docx.Inline{{Text: op.Method, Bold: true}, {Text: "  to your webhook URL"}}})
-		r.doc.Para(docx.Para{Inlines: []docx.Inline{{Text: "Webhook: ", Bold: true}, {Text: op.Path, Code: true}}})
+		r.doc.Para(docx.Para{Style: "Endpoint", Inlines: []docx.Inline{{Text: ep.Method, Bold: true}, {Text: "  to your webhook URL"}}})
+		r.doc.Para(docx.Para{Inlines: []docx.Inline{{Text: "Webhook: ", Bold: true}, {Text: ep.Path, Code: true}}})
 	} else {
-		r.doc.Para(docx.Para{Style: "Endpoint", Inlines: []docx.Inline{{Text: op.Method, Bold: true}, {Text: "  " + op.Path}}})
+		r.doc.Para(docx.Para{Style: "Endpoint", Inlines: []docx.Inline{{Text: ep.Method, Bold: true}, {Text: "  " + ep.Path}}})
 	}
 	if op.Deprecated {
 		r.doc.Para(docx.Para{Inlines: []docx.Inline{{Text: "Deprecated. ", Bold: true}, {Text: "This endpoint is still served but may be removed; avoid it in new code."}}})
 	}
 	r.write(markdown(r.doc, op.Description))
 
-	if op.Security != nil || len(r.spec.Schemes) > 0 && !webhook {
+	if ep.Security != nil || len(r.spec.Schemes) > 0 && !webhook {
 		in := []docx.Inline{{Text: "Authentication: ", Bold: true}}
-		if len(op.Security) == 0 {
+		if len(ep.Security) == 0 {
 			in = append(in, docx.Inline{Text: "none."})
 		} else {
-			in = append(in, r.requirement(op.Security)...)
+			in = append(in, r.requirement(ep.Security)...)
 			in = append(in, docx.Inline{Text: "."})
 		}
 		r.doc.Para(docx.Para{Inlines: in})
 	}
 
-	if len(op.Parameters) > 0 {
+	if len(ep.Parameters) > 0 {
 		r.doc.Heading(3, "Parameters", "")
 		t := docx.Table{Widths: []int{5, 3, 5, 3, 9}, Header: []string{"Name", "In", "Type", "Required", "Description"}}
-		for _, p := range op.Parameters {
+		for _, p := range ep.Parameters {
 			notes := r.notes(p.Schema)
 			if p.Deprecated {
 				notes = append([]string{"Deprecated."}, notes...)
@@ -394,7 +423,7 @@ func (r *renderer) operation(op *spec.Operation, webhook bool) {
 		r.doc.Table(t)
 	}
 
-	if b := op.RequestBody; b != nil {
+	if b := ep.RequestBody; b != nil {
 		r.doc.Heading(3, "Request body", "")
 		if b.Required {
 			r.doc.Para(docx.Para{Inlines: []docx.Inline{{Text: "A request body is required."}}})
@@ -407,10 +436,10 @@ func (r *renderer) operation(op *spec.Operation, webhook bool) {
 		}
 	}
 
-	if len(op.Responses) > 0 {
+	if len(ep.Responses) > 0 {
 		r.doc.Heading(3, "Responses", "")
 		t := docx.Table{Widths: []int{3, 7, 5}, Header: []string{"Status", "Description", "Body"}}
-		for _, resp := range op.Responses {
+		for _, resp := range ep.Responses {
 			var notes []string
 			for _, h := range resp.Headers {
 				note := "Header " + h.Name
@@ -450,7 +479,7 @@ func (r *renderer) operation(op *spec.Operation, webhook bool) {
 			})
 		}
 		r.doc.Table(t)
-		for _, resp := range op.Responses {
+		for _, resp := range ep.Responses {
 			contents := mergeContent(resp.Content)
 			for _, c := range contents {
 				label := "Example " + resp.Status + " response"
@@ -589,13 +618,21 @@ func (r *renderer) dataModels() {
 		return
 	}
 	r.doc.Heading(1, "Data models", "")
-	r.doc.Para(docx.Para{Inlines: []docx.Inline{{Text: "These are the objects that requests and responses carry. A field marked as required is always present."}}})
+	if r.proto() {
+		r.doc.Para(docx.Para{Inlines: []docx.Inline{{Text: "These are the messages and enums that requests and responses carry. Types from google.protobuf are the well-known types and are shown by name."}}})
+	} else {
+		r.doc.Para(docx.Para{Inlines: []docx.Inline{{Text: "These are the objects that requests and responses carry. A field marked as required is always present."}}})
+	}
 	for _, m := range r.spec.Models {
 		r.doc.Heading(2, m.Name, r.models[m])
 		if m.Deprecated {
 			r.doc.Para(docx.Para{Inlines: []docx.Inline{{Text: "Deprecated.", Bold: true}}})
 		}
 		r.write(markdown(r.doc, m.Description))
+		if r.proto() {
+			r.protoModel(m)
+			continue
+		}
 
 		alts, lead := m.OneOf, " is one of the following:"
 		if len(alts) == 0 {
@@ -805,8 +842,16 @@ func (r *renderer) single(s *spec.Schema, t string) []docx.Inline {
 		if s.Items == nil {
 			return []docx.Inline{{Text: "array"}}
 		}
+		if r.proto() {
+			return append([]docx.Inline{{Text: "repeated "}}, r.typeOf(s.Items)...)
+		}
 		return append([]docx.Inline{{Text: "array of "}}, r.typeOf(s.Items)...)
 	case "object":
+		if s.Key != nil && s.AdditionalProperties != nil {
+			out := append([]docx.Inline{{Text: "map<"}}, r.typeOf(s.Key)...)
+			out = append(append(out, docx.Inline{Text: ", "}), r.typeOf(s.AdditionalProperties)...)
+			return append(out, docx.Inline{Text: ">"})
+		}
 		if s.AdditionalProperties != nil && len(s.Properties) == 0 {
 			return append([]docx.Inline{{Text: "map of "}}, r.typeOf(s.AdditionalProperties)...)
 		}
@@ -816,6 +861,11 @@ func (r *renderer) single(s *spec.Schema, t string) []docx.Inline {
 		return []docx.Inline{{Text: t + " (" + s.Format + ")"}}
 	}
 	return []docx.Inline{{Text: t}}
+}
+
+// proto is false for the renderer plainType builds, which has no spec.
+func (r *renderer) proto() bool {
+	return r.spec != nil && r.spec.Format == spec.Protobuf
 }
 
 func (r *renderer) alternatives(lead string, list []*spec.Schema, sep string) []docx.Inline {
