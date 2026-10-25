@@ -39,11 +39,11 @@ func TestFetch(t *testing.T) {
 		agent = r.UserAgent()
 		switch r.URL.Path {
 		case "/ok.json":
-			w.Write([]byte(`{"A": {}}`))
+			_, _ = w.Write([]byte(`{"A": {}}`))
 		case "/big.json":
-			w.Write(make([]byte, maxFetchSize+1))
+			_, _ = w.Write(make([]byte, maxFetchSize+1))
 		case "/exact.json":
-			w.Write(make([]byte, maxFetchSize))
+			_, _ = w.Write(make([]byte, maxFetchSize))
 		case "/down":
 			http.Redirect(w, r, "http://"+r.Host+"/ok.json", http.StatusFound)
 		case "/loop":
@@ -93,7 +93,7 @@ func TestFetchIsOffByDefault(t *testing.T) {
 
 func TestFilesAreAlwaysRead(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "s.yaml")
-	os.WriteFile(p, []byte("A: {}\n"), 0o644)
+	mustWrite(t, p, []byte("A: {}\n"))
 	if b, err := newOpener(false).open(p); err != nil || string(b) != "A: {}\n" {
 		t.Errorf("%q %v", b, err)
 	}
@@ -101,10 +101,12 @@ func TestFilesAreAlwaysRead(t *testing.T) {
 
 func TestRenderFollowsFileRefs(t *testing.T) {
 	dir := t.TempDir()
-	os.MkdirAll(filepath.Join(dir, "schemas"), 0o755)
-	os.WriteFile(filepath.Join(dir, "schemas", "pet.yaml"), []byte("Pet: {properties: {name: {type: string}}}\n"), 0o644)
+	if err := os.MkdirAll(filepath.Join(dir, "schemas"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mustWrite(t, filepath.Join(dir, "schemas", "pet.yaml"), []byte("Pet: {properties: {name: {type: string}}}\n"))
 	spec := "openapi: 3.1.0\ncomponents:\n  schemas:\n    Pet: {$ref: 'schemas/pet.yaml#/Pet'}\n"
-	os.WriteFile(filepath.Join(dir, "openapi.yaml"), []byte(spec), 0o644)
+	mustWrite(t, filepath.Join(dir, "openapi.yaml"), []byte(spec))
 
 	out := filepath.Join(dir, "a.docx")
 	if r := cli(t, "", "render", filepath.Join(dir, "openapi.yaml"), "-o", out); r.code != 0 {
@@ -114,9 +116,7 @@ func TestRenderFollowsFileRefs(t *testing.T) {
 	isDocx(t, data)
 
 	// From stdin, a relative $ref resolves against the working directory.
-	wd, _ := os.Getwd()
-	t.Cleanup(func() { os.Chdir(wd) })
-	os.Chdir(dir)
+	t.Chdir(dir)
 	if r := cli(t, spec, "render", "-", "-o", "b.docx"); r.code != 0 {
 		t.Fatalf("stdin: %+v", r)
 	}

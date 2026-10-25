@@ -17,6 +17,13 @@ type result struct {
 	stdout, stderr string
 }
 
+func mustWrite(t testing.TB, path string, data []byte) {
+	t.Helper()
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func cli(t *testing.T, stdin string, args ...string) result {
 	t.Helper()
 	var out, errOut bytes.Buffer
@@ -112,7 +119,9 @@ func TestPaperSizeReachesTheDocument(t *testing.T) {
 			if f.Name == "word/document.xml" {
 				rc, _ := f.Open()
 				var b bytes.Buffer
-				b.ReadFrom(rc)
+				if _, err := b.ReadFrom(rc); err != nil {
+					t.Fatal(err)
+				}
 				rc.Close()
 				if !strings.Contains(b.String(), want) {
 					t.Errorf("%s: page size missing", paper)
@@ -163,7 +172,7 @@ func TestOutputCannotBeTheInput(t *testing.T) {
 	dir := t.TempDir()
 	in := filepath.Join(dir, "spec.json")
 	src, _ := os.ReadFile(aur)
-	os.WriteFile(in, src, 0o644)
+	mustWrite(t, in, src)
 	outs := []string{in}
 	// Creating a symlink on Windows needs a privilege CI may not have.
 	link := filepath.Join(dir, "link.json")
@@ -227,7 +236,7 @@ func osNotFound(t *testing.T, path string) string {
 func TestSpecProblemsExitOneWithTheReason(t *testing.T) {
 	dir := t.TempDir()
 	bad := filepath.Join(dir, "bad.yaml")
-	os.WriteFile(bad, []byte("openapi: 3.1.0\ncomponents:\n  schemas:\n    A: {$ref: 'other.yaml#/A'}\n"), 0o644)
+	mustWrite(t, bad, []byte("openapi: 3.1.0\ncomponents:\n  schemas:\n    A: {$ref: 'other.yaml#/A'}\n"))
 	missing := filepath.Join(dir, "missing.yaml")
 	noDir := filepath.Join(dir, "no", "such", "dir.docx")
 	cases := []struct {

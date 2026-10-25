@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"encoding/xml"
+	"errors"
 	"io"
 	"regexp"
 	"strings"
@@ -32,7 +33,7 @@ func unpack(t *testing.T, data []byte) map[string]string {
 		}
 		dec := xml.NewDecoder(bytes.NewReader(b))
 		for {
-			if _, err := dec.Token(); err == io.EOF {
+			if _, err := dec.Token(); errors.Is(err, io.EOF) {
 				break
 			} else if err != nil {
 				t.Fatalf("%s is not well-formed: %v", f.Name, err)
