@@ -77,16 +77,18 @@ type Table struct {
 
 // Doc accumulates the body of a document.
 type Doc struct {
-	Title  string
-	Paper  Paper
-	body   bytes.Buffer
-	links  []string
-	linkID map[string]string
-	lists  []listDef
-	marks  int
-	toc    []tocEntry
-	tocAt  int
-	hasTOC bool
+	Title string
+	Paper Paper
+	// TOCDepth is the deepest heading level the contents list, 1 to 3.
+	TOCDepth int
+	body     bytes.Buffer
+	links    []string
+	linkID   map[string]string
+	lists    []listDef
+	marks    int
+	toc      []tocEntry
+	tocAt    int
+	hasTOC   bool
 }
 
 type listDef struct {
@@ -95,7 +97,7 @@ type listDef struct {
 }
 
 func New(title string, paper Paper) *Doc {
-	return &Doc{Title: title, Paper: paper, linkID: map[string]string{}}
+	return &Doc{Title: title, Paper: paper, TOCDepth: 2, linkID: map[string]string{}}
 }
 
 // TextWidth is the width between the margins, in twentieths of a point.
@@ -185,14 +187,15 @@ func (d *Doc) Table(t Table) {
 	writePara(b, d, Para{Style: "AfterTable"})
 }
 
-// Heading writes a heading. Levels 1 and 2 are listed in the table of
-// contents. anchor names the bookmark other parts of the document link to;
-// pass "" when nothing links here and one is made up for the contents.
+// Heading writes a heading. Levels down to TOCDepth are listed in the
+// table of contents. anchor names the bookmark other parts of the document
+// link to; pass "" when nothing links here and one is made up for the
+// contents.
 func (d *Doc) Heading(level int, text, anchor string) {
 	if anchor == "" {
 		anchor = d.Bookmark()
 	}
-	if level <= 2 {
+	if level <= d.TOCDepth {
 		d.toc = append(d.toc, tocEntry{level, text, anchor})
 	}
 	d.Para(Para{Style: "Heading" + strconv.Itoa(level), Inlines: []Inline{{Text: text}}, Bookmark: anchor})
@@ -211,13 +214,13 @@ func (d *Doc) TOC() {
 	d.hasTOC = true
 }
 
-// tocXML is a TOC field over heading levels 1 and 2. Word fills in page
+// tocXML is a TOC field over heading levels 1 to TOCDepth. Word fills in page
 // numbers when it updates fields on open; until then the entries show
 // without them, so a viewer that never updates fields still gets a working
 // list of links.
 func (d *Doc) tocXML() string {
 	var b bytes.Buffer
-	begin := `<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> TOC \o "1-2" \h \z \u </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r>`
+	begin := `<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> TOC \o "1-` + strconv.Itoa(d.TOCDepth) + `" \h \z \u </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r>`
 	end := `<w:r><w:fldChar w:fldCharType="end"/></w:r>`
 	if len(d.toc) == 0 {
 		b.WriteString(`<w:p><w:pPr><w:pStyle w:val="TOC1"/></w:pPr>` + begin + end + `</w:p>`)
