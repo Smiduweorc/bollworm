@@ -87,6 +87,7 @@ func renderCmd(stdin io.Reader) *cobra.Command {
 		imports    bool
 		strict     bool
 		tocDepth   int
+		reference  string
 	)
 	cmd := &cobra.Command{
 		Use:   "render <spec> -o <file.docx>",
@@ -123,6 +124,7 @@ An existing output file is never replaced unless --force is given.`,
   curl -sSfL https://aur.archlinux.org/rpc/openapi.json | bollworm render - -o aur.docx
   bollworm render openapi.json -o - --paper letter > api.docx
   bollworm render openrpc.json -o api.docx
+  bollworm render openapi.yaml -o api.docx --reference-doc house-style.docx
   bollworm render proto/library/v1/library.proto --proto-path proto -o library.docx
   buf build -o api.binpb && bollworm render api.binpb -o api.docx`,
 		Args: cobra.ExactArgs(1),
@@ -146,7 +148,7 @@ An existing output file is never replaced unless --force is given.`,
 			if paper == "letter" {
 				size = docx.Letter
 			}
-			j := job{input: args[0], output: output, force: force, open: newOpener(remote), protoPaths: protoPaths, imports: imports, strict: strict}
+			j := job{input: args[0], output: output, force: force, open: newOpener(remote), protoPaths: protoPaths, imports: imports, strict: strict, reference: reference}
 			j.render.Paper, j.render.TOCDepth = size, tocDepth
 			if linkBase != "" {
 				j.render.LinkBase, _ = url.Parse(linkBase)
@@ -171,10 +173,12 @@ An existing output file is never replaced unless --force is given.`,
 	f.BoolVar(&imports, "include-imports", false, "protobuf: also describe the services of imported files (not google.protobuf or google.api)")
 	f.StringVar(&linkBase, "link-base", "", "absolute URL to resolve relative links in descriptions against")
 	f.BoolVar(&strict, "strict", false, "fail, writing nothing, when there are warnings")
+	f.StringVar(&reference, "reference-doc", "", "take the document's styles from this .docx; styles it lacks keep bollworm's")
 	f.IntVar(&tocDepth, "toc-depth", 2, "heading levels in the contents: 1 chapters, 2 endpoints, 3 their parts")
 	_ = cmd.MarkFlagRequired("output")
 	_ = cmd.MarkFlagFilename("output", "docx")
 	_ = cmd.MarkFlagDirname("proto-path")
+	_ = cmd.MarkFlagFilename("reference-doc", "docx")
 	_ = cmd.RegisterFlagCompletionFunc("paper", cobra.FixedCompletions([]string{"a4", "letter"}, cobra.ShellCompDirectiveNoFileComp))
 	_ = cmd.RegisterFlagCompletionFunc("toc-depth", cobra.FixedCompletions([]string{"1", "2", "3"}, cobra.ShellCompDirectiveNoFileComp))
 	_ = cmd.RegisterFlagCompletionFunc("link-base", cobra.NoFileCompletions)
@@ -190,6 +194,7 @@ type job struct {
 	protoPaths    []string
 	imports       bool
 	strict        bool
+	reference     string
 }
 
 func (j job) run(stdin io.Reader, stdout, stderr io.Writer) error {
@@ -258,6 +263,20 @@ func (j job) run(stdin io.Reader, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	var styled []string
+	if j.reference != "" {
+		data, err := os.ReadFile(j.reference)
+		if err != nil {
+			return err
+		}
+		var missing []string
+		if j.render.Styles, missing, err = docx.Reference(data); err != nil {
+			return fmt.Errorf("%s: %w", j.reference, err)
+		}
+		for _, id := range missing {
+			styled = append(styled, fmt.Sprintf("%s: it has no %q style, so bollworm's is used", j.reference, id))
+		}
+	}
 	out, rendered, err := render.Render(s, j.render)
 	if err != nil {
 		return err
@@ -273,7 +292,10 @@ func (j job) run(stdin io.Reader, stdout, stderr io.Writer) error {
 	for _, w := range rendered {
 		fmt.Fprintf(stderr, "bollworm: warning: %s: %s\n", name, w)
 	}
-	if n := len(s.Warnings) + len(rendered); j.strict && n > 0 {
+	for _, w := range styled {
+		fmt.Fprintf(stderr, "bollworm: warning: %s\n", w)
+	}
+	if n := len(s.Warnings) + len(rendered) + len(styled); j.strict && n > 0 {
 		noun := "warnings"
 		if n == 1 {
 			noun = "warning"

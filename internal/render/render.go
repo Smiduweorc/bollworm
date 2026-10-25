@@ -28,6 +28,9 @@ type Options struct {
 	// chapters, 2 (the default, when 0) for each endpoint, 3 for their
 	// parts as well.
 	TOCDepth int
+	// Styles replaces the built-in styles part when it is not empty; see
+	// docx.Reference.
+	Styles string
 }
 
 // Render returns the .docx bytes for s, and warnings about what the
@@ -46,6 +49,7 @@ func Render(s *spec.Spec, opts Options) ([]byte, []string, error) {
 		ops:     map[*spec.Operation]string{},
 		linker:  &linker{base: opts.LinkBase},
 	}
+	r.doc.Styles = opts.Styles
 	if opts.TOCDepth > 0 {
 		r.doc.TOCDepth = opts.TOCDepth
 	}

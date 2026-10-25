@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"errors"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -330,4 +331,39 @@ func TestWarningsStayOffStdout(t *testing.T) {
 		t.Fatalf("%+v", r.stderr)
 	}
 	isDocx(t, []byte(r.stdout))
+}
+
+func TestReferenceDoc(t *testing.T) {
+	dir := t.TempDir()
+	var buf bytes.Buffer
+	z := zip.NewWriter(&buf)
+	w, _ := z.Create("word/styles.xml")
+	_, _ = w.Write([]byte(`<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/><w:rPr><w:color w:val="C00000"/></w:rPr></w:style></w:styles>`))
+	_ = z.Close()
+	ref := filepath.Join(dir, "house.docx")
+	mustWrite(t, ref, buf.Bytes())
+
+	r := cli(t, "", "render", aur, "-o", "-", "--reference-doc", ref)
+	if r.code != 0 {
+		t.Fatalf("%+v", r.stderr)
+	}
+	isDocx(t, []byte(r.stdout))
+	doc, _ := zip.NewReader(strings.NewReader(r.stdout), int64(len(r.stdout)))
+	f, err := doc.Open("word/styles.xml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ := io.ReadAll(f)
+	if !bytes.Contains(got, []byte("C00000")) {
+		t.Error("the reference's heading colour did not reach the document")
+	}
+	if !strings.Contains(r.stderr, "bollworm: warning: "+ref+`: it has no "Normal" style, so bollworm's is used`) || strings.Contains(r.stderr, `"Heading1"`) {
+		t.Errorf("warnings: %s", r.stderr)
+	}
+	if r := cli(t, "", "render", aur, "-o", filepath.Join(dir, "s.docx"), "--reference-doc", ref, "--strict"); r.code != exitFailure {
+		t.Errorf("--strict let missing styles through: %+v", r)
+	}
+	if r := cli(t, "", "render", aur, "-o", filepath.Join(dir, "x.docx"), "--reference-doc", aur); r.code != exitFailure || !strings.Contains(r.stderr, aur+": not a .docx file") {
+		t.Errorf("non-docx reference: %+v", r)
+	}
 }

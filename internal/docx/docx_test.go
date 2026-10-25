@@ -367,3 +367,13 @@ func TestEveryReferencedStyleIsDefined(t *testing.T) {
 		}
 	}
 }
+
+func TestBuiltinStyleIDsAreUnique(t *testing.T) {
+	seen := map[string]bool{}
+	for _, m := range builtinStyle.FindAllStringSubmatch(styles, -1) {
+		if seen[m[1]] {
+			t.Errorf("style %s is defined twice", m[1])
+		}
+		seen[m[1]] = true
+	}
+}

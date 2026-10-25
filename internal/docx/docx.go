@@ -13,6 +13,7 @@ package docx
 import (
 	"archive/zip"
 	"bytes"
+	"cmp"
 	"encoding/xml"
 	"fmt"
 	"strconv"
@@ -79,6 +80,9 @@ type Table struct {
 type Doc struct {
 	Title string
 	Paper Paper
+	// Styles replaces the built-in styles part when it is not empty; see
+	// Reference.
+	Styles string
 	// TOCDepth is the deepest heading level the contents list, 1 to 3.
 	TOCDepth int
 	body     bytes.Buffer
@@ -400,7 +404,7 @@ func (d *Doc) parts() []part {
 		{"docProps/app.xml", appProps},
 		{"word/document.xml", d.document()},
 		{"word/_rels/document.xml.rels", d.documentRels()},
-		{"word/styles.xml", styles},
+		{"word/styles.xml", cmp.Or(d.Styles, styles)},
 		{"word/settings.xml", settings},
 		{"word/numbering.xml", d.numbering()},
 		{"word/footer1.xml", d.footer()},
