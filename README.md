@@ -1,7 +1,7 @@
 # Bollworm
 ![a picture of our handrawn logo](./assets/logo.png)
 
-Bollworm is a CI tool that turns your openAPI schema into a simple docx. This project is called bollworm because docx files are just a zipped xaml file, which is an archive of docments and hides abstractions, kinda like how a bollworm will bore holes inside a fruit and will do its work inside.
+Bollworm is a CI tool that turns your openAPI schema into a simple docx. This project is called bollworm because docx files are just a zipped xml file, which is an archive of docments and hides abstractions, kinda like how a bollworm will bore holes inside a fruit and will do its work inside.
 
 **Bollworm is for people who have an OpenAPI spec and have been asked for "the API document, in Word".**
 
