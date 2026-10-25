@@ -16,12 +16,20 @@ setup:
 fmt:
 	gofmt -w $(or $(FILES),.)
 
-## lint: gofmt check, go vet, go.mod tidiness; changes nothing
+SHELL_SCRIPTS := install.sh $(wildcard scripts/*.sh)
+
+## lint: gofmt check, go vet, golangci-lint, go.mod tidiness, shellcheck; changes nothing
 .PHONY: lint
 lint:
+	@command -v golangci-lint >/dev/null || { echo "golangci-lint not found. Install it: pacman -S golangci-lint, or see https://golangci-lint.run/docs/welcome/install/"; exit 1; }
+	@command -v shellcheck >/dev/null || { echo "shellcheck not found. Install it: pacman -S shellcheck, or apt-get install shellcheck"; exit 1; }
 	@unformatted=$$(gofmt -l .); if [ -n "$$unformatted" ]; then echo "not gofmt-clean:"; echo "$$unformatted"; exit 1; fi
 	go vet ./...
+	golangci-lint run ./...
 	go mod tidy -diff
+	shellcheck $(SHELL_SCRIPTS)
+	sh -n install.sh
+	for f in $(wildcard scripts/*.sh); do bash -n "$$f" || exit 1; done
 
 ## test: the full suite with the race detector
 .PHONY: test

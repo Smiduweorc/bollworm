@@ -1,0 +1,29 @@
+# golangci-lint v2. The version is pinned in .github/workflows/ci.yml; keep a
+# local install on the same release. Tests are linted like the source.
+version: "2"
+
+run:
+  tests: true
+
+linters:
+  default: standard
+  enable:
+    - errorlint
+    - gocritic
+    - misspell
+    - nolintlint
+    - unconvert
+    - unparam
+  exclusions:
+    # Close, Remove and printing to stderr on a path that is already
+    # returning an error, which is the only place this code ignores them.
+    presets:
+      - std-error-handling
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+formatters:
+  enable:
+    - gofmt

@@ -35,9 +35,25 @@ jobs:
           go-version: ${{ matrix.go }}
           cache: true
       - run: go mod download
-      - run: make lint
       - run: make test
       - run: make build
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.26.9"
+          cache: true
+      # The same release as a local install; .golangci.yml holds the rules.
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.15.0
+          install-only: true
+      - run: sudo apt-get update && sudo apt-get install -y shellcheck
+      - run: make lint
 
   ooxml:
     name: Schema-valid output
