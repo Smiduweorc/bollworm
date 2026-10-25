@@ -40,8 +40,6 @@ var styles = xmlHeader + `<w:styles ` + nsW + `>` +
 	`<w:pPr><w:spacing w:after="100"/><w:ind w:left="220"/></w:pPr></w:style>` +
 	`<w:style w:type="paragraph" w:styleId="TOC3"><w:name w:val="toc 3"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:uiPriority w:val="39"/><w:unhideWhenUsed/>` +
 	`<w:pPr><w:spacing w:after="100"/><w:ind w:left="440"/></w:pPr></w:style>` +
-	`<w:style w:type="paragraph" w:styleId="TOC3"><w:name w:val="toc 3"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:uiPriority w:val="39"/><w:unhideWhenUsed/>` +
-	`<w:pPr><w:spacing w:after="100"/><w:ind w:left="440"/></w:pPr></w:style>` +
 
 	`<w:style w:type="paragraph" w:styleId="ListParagraph"><w:name w:val="List Paragraph"/><w:basedOn w:val="Normal"/><w:uiPriority w:val="34"/><w:qFormat/>` +
 	`<w:pPr><w:ind w:left="720"/><w:contextualSpacing/></w:pPr></w:style>` +
