@@ -103,7 +103,7 @@ const settings = xmlHeader + `<w:settings ` + nsW + `>` +
 	`<w:defaultTabStop w:val="720"/>` +
 	`<w:characterSpacingControl w:val="doNotCompress"/>` +
 	// Fills in the table of contents' page numbers when the file is opened.
-	// Word asks before it does this; see the README's known quirks.
+	// Word asks before it does this; see docs/quirks.md.
 	`<w:updateFields w:val="true"/>` +
 	// Mode 15 is Word 2013 and later. Without it Word opens the file in
 	// Compatibility Mode, which is the first thing a reader notices.
