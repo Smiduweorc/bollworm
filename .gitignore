@@ -5,3 +5,5 @@ pkg/
 node_modules/
 build/
 interior/
+
+coverage.out
