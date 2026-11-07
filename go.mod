@@ -5,7 +5,7 @@ go 1.27.3
 require (
 	github.com/bufbuild/protocompile v0.14.1
 	github.com/spf13/cobra v1.10.2
-	github.com/yuin/goldmark v1.8.6
+	github.com/yuin/goldmark v1.8.7
 	golang.org/x/term v0.47.0
 	google.golang.org/genproto/googleapis/api v0.0.0-20261019180522-ce908d29299b
 	google.golang.org/protobuf v1.36.12
