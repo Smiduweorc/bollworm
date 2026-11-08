@@ -1,13 +1,10 @@
 # What ends up in the document
 
-## How it works
-
 Every format is read into one model, and one renderer lays that model out.
 An HTTP endpoint, a JSON-RPC method and a gRPC rpc are all a call; a tag and
 a service are both a chapter; a JSON Schema and a protobuf message are both
-a data model. So the three manuals have the same shape, and a feature such as
-deprecation, a "See also" link or the warning for something the manual
-cannot show works the same way in each.
+a data model. Deprecation, "See also" links and warnings work the same way
+in all three.
 
 | In the manual | OpenAPI | OpenRPC | Protobuf |
 | --- | --- | --- | --- |
@@ -25,26 +22,26 @@ name and for stdin, by its content: the `openapi` or `openrpc` field, a
 
 ## In every manual
 
-- **The title page** has the title and version, then the summary, contact,
+- The title page has the title and version, then the summary, contact,
   licence and terms of service when the spec gives them.
-- **The introduction** has the description, a table of servers with their
+- The introduction has the description, a table of servers with their
   variables, and a "See also" line for `externalDocs`, each when the spec
   has it.
-- **One chapter per group of calls**, in the order the groups are declared
+- One chapter per group of calls, in the order the groups are declared
   (or first used), then the calls in no group. A call in several groups is
   described in the chapter of its first one, and the chapters of the others
   list it with a link there.
-- **Each call** has its name and description, a deprecation notice when it is
+- Each call has its name and description, a deprecation notice when it is
   deprecated, and a "See also" line for its `externalDocs`.
-- **The data models chapter** has a section per model. A reference to a model
+- The data models chapter has a section per model. A reference to a model
   anywhere in the manual links to its section.
-- **Descriptions** are CommonMark (with GitHub's tables and strikethrough),
+- Descriptions are CommonMark (with GitHub's tables and strikethrough),
   turned into Word paragraphs, lists, tables and links.
-- **Examples** are printed as JSON in the order they were written.
+- Examples are printed as JSON in the order they were written.
 
 ## Calls
 
-**An OpenAPI endpoint** gets its method and path, the authentication it
+An OpenAPI endpoint gets its method and path, the authentication it
 needs, its parameters (with their `style` and `explode` when given), its
 request body (with its multipart or form `encoding`), and a table of
 responses with their headers and bodies, then each response's examples and
@@ -52,7 +49,7 @@ responses with their headers and bodies, then each response's examples and
 laid out like the endpoint. A non-JSON example (XML, CSV, plain text) is
 printed as it is. `webhooks` get a chapter of their own.
 
-**An OpenRPC method** gets the name a client calls, a table of its params in
+An OpenRPC method gets the name a client calls, a table of its params in
 order with whether they go by name, by position or either, its result, and a
 table of its errors with their `data`. A method with no `result` is described
 as a notification. A method's own `servers` replace the document's for it.
@@ -60,7 +57,7 @@ Each example pairing is printed as the `params` a client sends and the
 `result` it gets back, shaped as an object or an array to match the param
 structure; an example given only as an `externalValue` is a link to it.
 
-**A gRPC rpc** gets its gRPC path, its request and response messages, the
+A gRPC rpc gets its gRPC path, its request and response messages, the
 streaming kind (none, server, client or bidirectional), and a table of its
 HTTP mappings when it has a `google.api.http` option. Connect and Twirp
 services are protobuf services, so their `.proto` files render the same
@@ -69,7 +66,7 @@ and which Twirp serves under `/twirp` by default.
 
 ## Data models
 
-**OpenAPI and OpenRPC** models are JSON Schema, and both formats get the same
+OpenAPI and OpenRPC models are JSON Schema, and both formats get the same
 treatment. Each model has a table of fields. Nested anonymous objects are
 spelled out as `address.city`. Keywords beside a `$ref` (`readOnly`,
 `example`, `nullable` and the rest) apply on top of the model.
@@ -79,7 +76,7 @@ as "no other properties", the `false` schema as "nothing", and every entry of
 models they select, and `xml` names, attributes, wrapping and namespaces are
 spelled out.
 
-**Protobuf** messages have a table of fields with their numbers and types:
+Protobuf messages have a table of fields with their numbers and types:
 `repeated`, `map<K, V>`, `oneof` membership and `required` (proto2) are
 spelled out. Enums have a table of values and their numbers. Nested types are
 models of their own, named `Book.Format`. The well-known types
