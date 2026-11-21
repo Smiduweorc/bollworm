@@ -17,7 +17,7 @@ style gallery work as usual. It is a single static binary.
 # Arch Linux (AUR), with completions for bash, zsh and fish
 yay -S bollworm      # or: paru -S bollworm
 
-# Go 1.27.3 or later
+# Go 1.27.4 or later
 go install github.com/Smiduweorc/bollworm/cmd/bollworm@latest
 
 # Released binary (Linux and macOS, amd64 and arm64), checksum verified

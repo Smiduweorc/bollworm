@@ -1,6 +1,6 @@
 # Development
 
-Go 1.27.3 and npm (for lefthook, commitlint and git-cliff, installed by
+Go 1.27.4 and npm (for lefthook, commitlint and git-cliff, installed by
 `make setup`). `make lint` also needs golangci-lint (CI pins v2.15.0) and
 shellcheck on the `PATH`; on Arch, `pacman -S golangci-lint shellcheck`.
 `make validate` needs `curl` and `xmllint`.

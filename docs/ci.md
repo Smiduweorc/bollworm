@@ -24,7 +24,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
-          go-version: "1.27.3"
+          go-version: "1.27.4"
       - run: go install github.com/Smiduweorc/bollworm/cmd/bollworm@latest
       - run: bollworm render openrpc.json -o api.docx --strict
       - uses: actions/upload-artifact@v7

@@ -1,6 +1,6 @@
 module github.com/Smiduweorc/bollworm
 
-go 1.27.3
+go 1.27.4
 
 require (
 	github.com/bufbuild/protocompile v0.14.1
