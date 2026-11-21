@@ -41,10 +41,10 @@ go-version:
 test:
 	go test -race -coverprofile=coverage.out ./...
 
-## fuzz: fuzz the parser and renderer (FUZZTIME=30s by default)
+## fuzz: fuzz every parser and the renderer (FUZZTIME=30s by default)
 .PHONY: fuzz
 fuzz:
-	go test ./internal/render -run '^$$' -fuzz FuzzRender -fuzztime $(or $(FUZZTIME),30s)
+	scripts/fuzz.sh $(or $(FUZZTIME),30s)
 
 ## validate: check rendered documents against the ECMA-376 schema (needs curl, xmllint)
 .PHONY: validate

@@ -1,0 +1,41 @@
+name: Fuzz
+
+# Continuous fuzzing: CI runs a short smoke on every push; this runs every
+# target far longer each night and keeps any crasher as an artifact.
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+    inputs:
+      fuzztime:
+        description: Time per fuzz target
+        default: 10m
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    name: Fuzz (nightly)
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Restore fuzz cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/go-build/fuzz
+          key: fuzz-${{ github.run_id }}
+          restore-keys: fuzz-
+      - name: Fuzz
+        run: scripts/fuzz.sh ${{ inputs.fuzztime || '10m' }}
+      - name: Keep crashers
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crashers
+          path: '**/testdata/fuzz/**'

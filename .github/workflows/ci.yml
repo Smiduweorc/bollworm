@@ -76,7 +76,7 @@ jobs:
         with:
           go-version: "1.27.3"
           cache: true
-      - run: make fuzz FUZZTIME=60s
+      - run: make fuzz FUZZTIME=30s
 
   release-check:
     name: GoReleaser config
